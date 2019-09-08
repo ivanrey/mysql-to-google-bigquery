@@ -1,4 +1,5 @@
 <?php
+
 namespace MysqlToGoogleBigQuery\Database;
 
 use Doctrine\DBAL\Types\Type;
@@ -11,8 +12,8 @@ class BigQuery
 
     /**
      * Create a BigQuery Table based on MySQL Table columns
-     * @param  string $tableName           Table Name
-     * @param  array  $mysqlTableColumns   Array of Doctrine\DBAL\Schema\Column
+     * @param string $tableName Table Name
+     * @param array $mysqlTableColumns Array of Doctrine\DBAL\Schema\Column
      * @return Google\Cloud\BigQuery\Table Table object
      */
     public function createTable($tableName, $mysqlTableColumns)
@@ -79,7 +80,8 @@ class BigQuery
             ];
         }
 
-        $client = $this->getClient();
+        $client = $this->getClient()/** @var $dataset DataSet */
+        ;
         $dataset = $client->dataset($_ENV['BQ_DATASET']);
 
         return $dataset->createTable($tableName, [
@@ -91,7 +93,7 @@ class BigQuery
 
     /**
      * Delete a BigQuery Table
-     * @param  string $tableName Table Name
+     * @param string $tableName Table Name
      */
     public function deleteTable(string $tableName)
     {
@@ -102,14 +104,14 @@ class BigQuery
 
     /**
      * Get the number of rows on a table
-     * @param  string $tableName Table name
+     * @param string $tableName Table name
      * @return int|bool          false if table doesn't exists, or the number of rows
      */
     public function getCountTableRows(string $tableName)
     {
         $this->getTablesMetadata();
 
-        if (! array_key_exists($tableName, $this->tablesMetadata)) {
+        if (!array_key_exists($tableName, $this->tablesMetadata)) {
             return false;
         }
 
@@ -118,8 +120,8 @@ class BigQuery
 
     /**
      * Get the maximum value of a column
-     * @param  string $tableName Table name
-     * @param  string $columnName   Column name
+     * @param string $tableName Table name
+     * @param string $columnName Column name
      * @return string               Max value
      */
     public function getMaxColumnValue(string $tableName, string $columnName)
@@ -127,8 +129,8 @@ class BigQuery
         $client = $this->getClient();
 
         $result = $client->runQuery(
-            'SELECT MAX([' . $columnName . ']) AS columnMax FROM [' . $_ENV['BQ_DATASET'] . '.' .  $tableName . ']'
-        );
+            'SELECT MAX([' . $columnName . ']) AS columnMax FROM [' . $_ENV['BQ_DATASET'] . '.' . $tableName . ']'
+            , ['useLegacy' => false]);
 
         $isComplete = $result->isComplete();
         while (!$isComplete) {
@@ -146,9 +148,9 @@ class BigQuery
 
     /**
      * Delete all values of a column
-     * @param  string $tableName Table name
-     * @param  string $columnName   Column name
-     * @param  string $columnValue  Value to be deleted
+     * @param string $tableName Table name
+     * @param string $columnName Column name
+     * @param string $columnValue Value to be deleted
      * @return string               Result
      */
     public function deleteColumnValue(string $tableName, string $columnName, string $columnValue)
@@ -156,13 +158,13 @@ class BigQuery
         $client = $this->getClient();
 
         // Non numeric values needs ""
-        if (! is_numeric($columnValue)) {
+        if (!is_numeric($columnValue)) {
             $columnValue = '"' . $columnValue . '"';
         }
 
         $result = $client->runQuery(
-            'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' .  $tableName . '`' .
-            ' WHERE `' . $columnName .'` = ' . $columnValue,
+            'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
+            ' WHERE `' . $columnName . '` = ' . $columnValue,
             ['useLegacySql' => false]
         );
 
@@ -193,7 +195,7 @@ class BigQuery
             $keyFilePath = getcwd() . '/' . $keyFilePath;
         }
 
-        if (! file_exists($keyFilePath)) {
+        if (!file_exists($keyFilePath)) {
             throw new \Exception('Google Service Account JSON Key File not found', 1);
         }
 
@@ -226,8 +228,8 @@ class BigQuery
 
     /**
      * Load data to BigQuery reading it from JSON NEWLINE DELIMITED File
-     * @param  resource|string $file                Resource or String (path) of JSON file
-     * @param  string          $tableName           Table Name
+     * @param resource|string $file Resource or String (path) of JSON file
+     * @param string $tableName Table Name
      * @return Google\Cloud\BigQuery\Job            BigQuery Data Load Job
      */
     public function loadFromJson($file, $tableName)
@@ -250,7 +252,7 @@ class BigQuery
 
     /**
      * Check if a BigQuery table exists
-     * @param  string $tableName Table name
+     * @param string $tableName Table name
      * @return bool              True if table exists
      */
     public function tableExists(string $tableName)

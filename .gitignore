@@ -2,3 +2,4 @@ vendor/
 key.json
 keyfile.json
 .env
+.idea
