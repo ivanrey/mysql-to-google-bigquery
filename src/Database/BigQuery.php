@@ -129,8 +129,8 @@ class BigQuery
         $client = $this->getClient();
 
         $result = $client->runQuery(
-            'SELECT MAX([' . $columnName . ']) AS columnMax FROM [' . $_ENV['BQ_DATASET'] . '.' . $tableName . ']'
-            , ['useLegacy' => false]);
+            'SELECT MAX(' . $columnName . ') AS columnMax FROM ' . $_ENV['BQ_DATASET'] . '.' . $tableName.' WHERE created_at >= TIMESTAMP(\'2000-01-01\')' 
+            , ['useLegacySql' => false]);
 
         $isComplete = $result->isComplete();
         while (!$isComplete) {
@@ -164,7 +164,7 @@ class BigQuery
 
         $result = $client->runQuery(
             'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
-            ' WHERE `' . $columnName . '` = ' . $columnValue,
+            ' WHERE `' . $columnName . '` = ' . $columnValue. ' AND created_at >= TIMESTAMP(\'2000-01-01\')',
             ['useLegacySql' => false]
         );
 
