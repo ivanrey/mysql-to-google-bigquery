@@ -127,9 +127,9 @@ class BigQuery
     public function getMaxColumnValue(string $tableName, string $columnName)
     {
         $client = $this->getClient();
-
         $result = $client->runQuery(
-            'SELECT MAX(' . $columnName . ') AS columnMax FROM ' . $_ENV['BQ_DATASET'] . '.' . $tableName.' WHERE created_at >= TIMESTAMP(\'2000-01-01\')' 
+            'SELECT MAX(' . $columnName . ') AS columnMax FROM ' . $_ENV['BQ_DATASET'] . '.' . $tableName . ' WHERE created_at >= \''. date('Y-m-d', 
+		strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) .'\'' 
             , ['useLegacySql' => false]);
 
         $isComplete = $result->isComplete();
@@ -160,14 +160,15 @@ class BigQuery
         // Non numeric values needs ""
         if (!is_numeric($columnValue)) {
             $columnValue = '"' . $columnValue . '"';
-        }
+	}
+
+	$date = date('Y-m-d', strtotime('-3 month') );
 
         $result = $client->runQuery(
             'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
-            ' WHERE `' . $columnName . '` = ' . $columnValue. ' AND created_at >= TIMESTAMP(\'2000-01-01\')',
+	    ' WHERE `' . $columnName . '` = ' . $columnValue. " AND created_at >= '$date'",
             ['useLegacySql' => false]
         );
-
         $isComplete = $result->isComplete();
         while (!$isComplete) {
             sleep(1);
@@ -202,7 +203,8 @@ class BigQuery
         return $this->client = new BigQueryClient([
             'projectId' => $_ENV['BQ_PROJECT_ID'],
             'keyFile' => json_decode(file_get_contents($keyFilePath), true),
-            'scopes' => [BigQueryClient::SCOPE]
+	    'scopes' => [BigQueryClient::SCOPE],
+    	    'location' => $_ENV['BQ_LOCATION'] ?? 'US',
         ]);
     }
 
