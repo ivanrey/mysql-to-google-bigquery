@@ -51,7 +51,9 @@ class SyncService
         bool $deleteTable,
         $orderColumn,
         array $ignoreColumns,
-        OutputInterface $output
+        OutputInterface $output,
+        bool $noData,
+        bool $unbuffered
     ) {
         if ($deleteTable) {
             // Delete the BigQuery Table before any operation
@@ -67,11 +69,21 @@ class SyncService
             if (!$createTable) {
                 throw new \Exception('BigQuery table ' . $bigQueryTableName . ' not found');
             }
-
+            $output->writeln("<fg=green>Creating table: " . $tableName."</>"); 
             $this->createTable($databaseName, $tableName, $bigQueryTableName);
         }
+        else 
+        {
+            $output->writeln("<fg=green>We will not create a table</>"); 
+        }
 
-        if ($orderColumn) {
+        if ( $noData )
+        {
+          $output->writeln("<fg=green>No data specified, will not sync data.</>");
+          exit;
+        }
+
+        if (!$unbuffered && $orderColumn) {
             $output->writeln('<fg=green>Using order column "' . $orderColumn . '"</>');
 
             $mysqlMaxColumnValue = $this->mysql->getMaxColumnValue($databaseName, $tableName, $orderColumn);
@@ -107,42 +119,62 @@ class SyncService
             $bigQueryMaxColumnValue = false;
         }
 
-        $mysqlCountTableRows = $this->mysql->getCountTableRows($databaseName, $tableName, $orderColumn, $bigQueryMaxColumnValue);
+        if ( !$unbuffered ) 
+        {
+            	$mysqlCountTableRows = $this->mysql->getCountTableRows($databaseName, $tableName, $orderColumn, $bigQueryMaxColumnValue);
+        }
         $bigQueryCountTableRows = $orderColumn ? 0 : $this->bigQuery->getCountTableRows($bigQueryTableName, $orderColumn);
-
-        $rowsDiff = $mysqlCountTableRows - $bigQueryCountTableRows;
-
-        // We don't need to sync
-        if ($rowsDiff <= 0) {
-            $output->writeln('<fg=green>Already synced!</>');
-            return;
-        } else {
-            $output->writeln('<fg=green>Syncing ' . $rowsDiff . ' rows</>');
+        
+        if ( !$unbuffered ) 
+        {
+            $rowsDiff = $mysqlCountTableRows - $bigQueryCountTableRows;
+        
+            // We don't need to sync
+            if ($rowsDiff <= 0) {
+                $output->writeln('<fg=green>Already synced!</>');
+                return;
+            } else {
+                $output->writeln('<fg=green>Syncing ' . $rowsDiff . ' rows</>');
+            }
         }
 
-        $maxRowsPerBatch = (isset($_ENV['MAX_ROWS_PER_BATCH'])) ? $_ENV['MAX_ROWS_PER_BATCH'] : 20000;
-        $batches = ceil($rowsDiff / $maxRowsPerBatch);
-
-        $output->writeln('<info>Sending ' . $batches . ' batches of ' . $maxRowsPerBatch . ' rows/batch</info>');
-        $progress = new ProgressBar($output, $batches);
-
-        for ($i = 0; $i < $batches; $i++) {
-            $offset = $bigQueryCountTableRows + ($i * $maxRowsPerBatch);
-            $this->sendBatch(
-                $databaseName,
-                $tableName,
-                $bigQueryTableName,
-                $orderColumn,
-                $ignoreColumns,
-                $offset,
-                $maxRowsPerBatch,
-                $bigQueryMaxColumnValue
-            );
-            $progress->advance();
+        $maxRowsPerBatch = (isset($_ENV['MAX_ROWS_PER_BATCH'])) ? $_ENV['MAX_ROWS_PER_BATCH'] : 600000;
+        
+        if ( $unbuffered ) 
+        {
+            $output->writeln('<fg=green>Starting unbuffered copy..</>');
+            $this->sendBatchUnbuffered(
+                    $databaseName,
+                    $tableName,
+                    $bigQueryTableName,
+                    $ignoreColumns
+                    );
+                    $output->writeln('<fg=green>Synced!</>');
         }
-
-        $output->writeln('<fg=green>Synced!</>');
-        $progress->finish();
+        else 
+        {
+            $batches = ceil($rowsDiff / $maxRowsPerBatch);
+            $output->writeln('<info>Sending ' . $batches . ' batches of ' . $maxRowsPerBatch . ' rows/batch</info>');
+            $progress = new ProgressBar($output, $batches);
+    
+            for ($i = 0; $i < $batches; $i++) {
+                $offset = $bigQueryCountTableRows + ($i * $maxRowsPerBatch);
+                
+                $this->sendBatch(
+                    $databaseName,
+                    $tableName,
+                    $bigQueryTableName,
+                    $orderColumn,
+                    $ignoreColumns,
+                    $offset,
+                    $maxRowsPerBatch,
+                    $bigQueryMaxColumnValue
+                );
+                $progress->advance();
+            }
+            $output->writeln('<fg=green>Synced!</>');
+            $progress->finish();
+        }
     }
 
     /**
@@ -194,28 +226,7 @@ class SyncService
         }
 
         while ($row = $mysqlQueryResult->fetch()) {
-            foreach ($row as $key => $value) {
-                // Ignore the column
-                if (in_array($key, $ignoreColumns)) {
-                    unset($row[$key]);
-                    continue;
-                }
-
-                // Convert to PHP values, BigQuery requires the correct types on JSON, uppercase is not supported by
-                // BigQuery - make keys lowercase
-                $type = $mysqlTableColumns[strtolower($key)]->getType();
-
-                if ($type->getName() !== Type::STRING
-                    && $type->getName() !== Type::TEXT
-                ) {
-                    $row[$key] = $type->convertToPhpValue($value, $mysqlPlatform);
-                }
-
-                if (is_string($row[$key])) {
-                    $row[$key] = mb_convert_encoding($row[$key], 'UTF-8', mb_detect_encoding($value));
-                }
-            }
-
+            $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
             $string = json_encode($row);
 
             // Google BigQuery needs JSON new line delimited file
@@ -245,6 +256,102 @@ class SyncService
     }
 
     /**
+     * Process one record of data
+     *
+     * @param  string $mysqlTableColumns     The columns in the mysql record
+     * @param  string $mysqlPlatform         The platform from the database connection
+     * @param  array  $ignoreColumns         Ignore columns from syncing
+     * @param  array $row                    The record pulled from mysql
+     */    
+    protected function processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row)
+    {
+        foreach ($row as $key => $value) {
+            // Ignore the column
+            if (in_array($key, $ignoreColumns)) {
+                unset($row[$key]);
+                continue;
+            }
+        
+            // Convert to PHP values, BigQuery requires the correct types on JSON, uppercase is not supported by
+            // BigQuery - make keys lowercase
+            $type = $mysqlTableColumns[strtolower($key)]->getType();
+        
+            if ($type->getName() !== Type::STRING
+                && $type->getName() !== Type::TEXT
+            ) {
+                $row[$key] = $type->convertToPhpValue($value, $mysqlPlatform);
+            }
+        
+            if (is_string($row[$key])) {
+                $row[$key] = mb_convert_encoding($row[$key], 'UTF-8', mb_detect_encoding($value));
+            }
+        }
+        return $row; 
+    }
+
+/**
+ * Send a batch of data UNBUFFERED
+ * 
+ * https://www.php.net/manual/en/mysqlinfo.concepts.buffering.php
+ * 
+ * @param  string $databaseName          Database name
+ * @param  string $tableName             Table name
+ * @param  string $bigQueryTableName     BigQuery Table name
+ * @param  array  $ignoreColumns         Ignore columns from syncing
+ */
+protected function sendBatchUnbuffered(
+        string $databaseName,
+        string $tableName,
+        string $bigQueryTableName,
+        array $ignoreColumns
+    ) {
+        $mysqlConnection = $this->mysql->getConnection($databaseName); 
+        $mysqlConnection->getWrappedConnection()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        
+        $mysqlPlatform = $mysqlConnection->getDatabasePlatform();
+        $mysqlTableColumns = $this->mysql->getTableColumns($databaseName, $tableName);
+
+        $jsonFilePath = ((isset($_ENV['CACHE_DIR'])) ? $_ENV['CACHE_DIR'] : __DIR__ . '/../../cache/') . $tableName;
+
+        if (file_exists($jsonFilePath)) {
+            unlink($jsonFilePath);
+        }
+
+        $json = fopen($jsonFilePath, 'a+');
+
+        $mysqlQueryResult = $mysqlConnection->query('SELECT * FROM `' . $tableName . '`', MYSQLI_USE_RESULT);
+
+        while ($row = $mysqlQueryResult->fetch()) {
+            $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
+            $string = json_encode($row);
+
+            // Google BigQuery needs JSON new line delimited file
+            // Each line of the file will be each MySQL row converted to JSON
+            fwrite($json, json_encode($row) . PHP_EOL);
+        }
+
+        // Rewind to the beginning of the JSON file
+        rewind($json);
+
+        // We have a job running, waits to send the next
+        if ($this->currentJob) {
+            $this->waitJob($this->currentJob);
+        }
+
+        // Send JSON to BigQuery
+        $job = $this->bigQuery->loadFromJson($json, $bigQueryTableName);
+
+        // This is the first job, waits for a first success to continue
+        if (! $this->currentJob) {
+            $this->waitJob($job);
+        }
+
+        $this->currentJob = $job;
+        unlink($jsonFilePath);
+    }
+
+
+    /**
      * Wait for a BigQuery Job
      * @param  Google\Cloud\BigQuery\Job $job BigQuery Job
      */
@@ -272,3 +379,4 @@ class SyncService
         }
     }
 }
+
