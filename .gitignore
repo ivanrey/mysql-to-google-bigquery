@@ -1,5 +1,10 @@
 vendor/
 key.json
 keyfile.json
+service-account-key.json
+*-key.json
 .env
+.env.*
+!.env.sample
 .idea
+nohup.out
