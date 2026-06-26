@@ -52,8 +52,8 @@ class SyncService
         $orderColumn,
         array $ignoreColumns,
         OutputInterface $output,
-        bool $noData,
-        bool $unbuffered
+        bool $noData = false,
+        bool $unbuffered = false
     ) {
         if ($deleteTable) {
             // Delete the BigQuery Table before any operation
@@ -360,9 +360,20 @@ protected function sendBatchUnbuffered(
         $errors = [];
         $jobInfo = $job->info();
 
+        // google/cloud v0.11.1 doesn't keep the job location in its identity,
+        // so reload() issues a jobs.get without location and fails (404) for
+        // jobs that run in a non-US/EU regional location. We read the location
+        // from the initial insert response and pass it explicitly on reload.
+        // Requires the location query param patched into the service definition
+        // (see patches/google-cloud-bigquery-job-location.patch).
+        $options = [];
+        if (isset($jobInfo['jobReference']['location'])) {
+            $options['location'] = $jobInfo['jobReference']['location'];
+        }
+
         while ($jobInfo['status']['state'] === 'RUNNING') {
             echo '.';
-            $jobInfo = $job->reload();
+            $jobInfo = $job->reload($options);
             // Wait a second to retry
             sleep(1);
         }

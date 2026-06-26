@@ -1,0 +1,26 @@
+--- a/src/BigQuery/Connection/ServiceDefinition/bigquery-v2.json
++++ b/src/BigQuery/Connection/ServiceDefinition/bigquery-v2.json
+@@ -1892,6 +1892,11 @@
+               "description": "[Required] Project ID of the requested job",
+               "required": true,
+               "location": "path"
++            },
++            "location": {
++              "type": "string",
++              "description": "[Optional] The geographic location of the job. Required for non-US/EU regional jobs.",
++              "location": "query"
+             }
+           },
+           "parameterOrder": [
+@@ -1947,6 +1952,11 @@
+               "description": "How long to wait for the query to complete, in milliseconds, before returning. Default is 10 seconds. If the timeout passes before the job completes, the 'jobComplete' field in the response will be false",
+               "format": "uint32",
+               "location": "query"
++            },
++            "location": {
++              "type": "string",
++              "description": "[Optional] The geographic location of the job. Required for non-US/EU regional jobs.",
++              "location": "query"
+             }
+           },
+           "parameterOrder": [

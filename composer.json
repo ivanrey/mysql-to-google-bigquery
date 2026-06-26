@@ -16,7 +16,8 @@
         "php-di/php-di": "^5.4",
         "google/cloud": "^0.11.1",
         "doctrine/dbal": "^2.5",
-        "facile-it/doctrine-mysql-come-back": "^1.6"
+        "facile-it/doctrine-mysql-come-back": "^1.6",
+        "cweagans/composer-patches": "^1.7"
     },
     "autoload": {
         "psr-4": {
@@ -24,7 +25,17 @@
         }
     },
     "config": {
-        "bin-dir": "bin"
+        "bin-dir": "bin",
+        "allow-plugins": {
+            "cweagans/composer-patches": true
+        }
+    },
+    "extra": {
+        "patches": {
+            "google/cloud": {
+                "Add location parameter to jobs.get/getQueryResults for regional jobs": "patches/google-cloud-bigquery-job-location.patch"
+            }
+        }
     },
     "bin": ["bin/console"]
 }
