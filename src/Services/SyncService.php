@@ -1,7 +1,6 @@
 <?php
 namespace MysqlToGoogleBigQuery\Services;
 
-use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use MysqlToGoogleBigQuery\Database\BigQuery;
 use MysqlToGoogleBigQuery\Database\Mysql;
@@ -311,7 +310,6 @@ protected function sendBatchUnbuffered(
         array $ignoreColumns
     ) {
         $mysqlConnection = $this->mysql->getConnection($databaseName);
-        $mysqlConnection->getNativeConnection()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
 
         $mysqlPlatform = $mysqlConnection->getDatabasePlatform();
         $mysqlTableColumns = $this->mysql->getTableColumns($databaseName, $tableName);
@@ -324,9 +322,20 @@ protected function sendBatchUnbuffered(
 
         $json = fopen($jsonFilePath, 'a+');
 
-        $mysqlQueryResult = $mysqlConnection->executeQuery('SELECT * FROM `' . $tableName . '`');
+        // Run the unbuffered SELECT directly on the native PDO, NOT through the
+        // DBAL/facile-it connection. facile-it wraps executeQuery() in a retry
+        // loop that, on a "MySQL server has gone away", closes the connection
+        // and reconnects with a fresh PDO — that new PDO would NOT carry the
+        // MYSQL_ATTR_USE_BUFFERED_QUERY=false set below, so the query would run
+        // buffered and load the whole table into memory. Issuing it on the same
+        // PDO we set the attribute on keeps the stream truly unbuffered; a dead
+        // connection here fails loudly instead of silently buffering.
+        $pdo = $mysqlConnection->getNativeConnection();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
 
-        while ($row = $mysqlQueryResult->fetchAssociative()) {
+        $mysqlQueryResult = $pdo->query('SELECT * FROM `' . $tableName . '`');
+
+        while ($row = $mysqlQueryResult->fetch(\PDO::FETCH_ASSOC)) {
             $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
 
             // Google BigQuery needs JSON new line delimited file
