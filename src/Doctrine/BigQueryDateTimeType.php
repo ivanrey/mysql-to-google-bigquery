@@ -6,18 +6,12 @@ use Doctrine\DBAL\Platforms\AbstractPlatform;
 
 class BigQueryDateTimeType extends Type
 {
-    /**
-     * {@inheritdoc}
-     */
-    public function getSQLDeclaration(array $fieldDeclaration, AbstractPlatform $platform)
+    public function getSQLDeclaration(array $column, AbstractPlatform $platform): string
     {
         return 'datetime';
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    public function convertToPHPValue($value, AbstractPlatform $platform)
+    public function convertToPHPValue($value, AbstractPlatform $platform): mixed
     {
         if ($value === '0000-00-00 00:00:00') {
             return null;
@@ -26,18 +20,12 @@ class BigQueryDateTimeType extends Type
         return str_replace(' ', 'T', $value);
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    public function convertToDatabaseValue($value, AbstractPlatform $platform)
+    public function convertToDatabaseValue($value, AbstractPlatform $platform): mixed
     {
         return str_replace('T', ' ', $value);
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    public function getName()
+    public function getName(): string
     {
         return 'bigquerydatetime';
     }

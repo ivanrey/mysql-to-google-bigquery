@@ -19,27 +19,29 @@ class Mysql
             return $this->conn;
         }
 
-        $config = new \Doctrine\DBAL\Configuration();
-
-        $connParams = array(
+        $connParams = [
             'dbname' => $databaseName,
             'user' => $_ENV['DB_USERNAME'],
             'password' => $_ENV['DB_PASSWORD'],
             'host' => $_ENV['DB_HOST'],
             'charset'  => 'utf8',
+            'driver' => 'pdo_mysql',
             // Special doctrine driver, with reconnect attempts support
-            'wrapperClass' => 'Facile\DoctrineMySQLComeBack\Doctrine\DBAL\Connection',
-            'driverClass' => 'Facile\DoctrineMySQLComeBack\Doctrine\DBAL\Driver\PDOMySql\Driver',
+            'wrapperClass' => \Facile\DoctrineMySQLComeBack\Doctrine\DBAL\Connection::class,
             'driverOptions' => [
                 'x_reconnect_attempts' => 9
             ]
-        );
+        ];
 
-        $this->conn = \Doctrine\DBAL\DriverManager::getConnection($connParams, $config);
+        $this->conn = \Doctrine\DBAL\DriverManager::getConnection($connParams);
 
-        // Replace the DateTime conversion
-        Type::addType('bigquerydatetime', 'MysqlToGoogleBigQuery\Doctrine\BigQueryDateTimeType');
-        Type::addType('bigquerydate', 'MysqlToGoogleBigQuery\Doctrine\BigQueryDateType');
+        // Replace the DateTime conversion (guard prevents re-registration on repeated calls)
+        if (!Type::hasType('bigquerydatetime')) {
+            Type::addType('bigquerydatetime', 'MysqlToGoogleBigQuery\Doctrine\BigQueryDateTimeType');
+        }
+        if (!Type::hasType('bigquerydate')) {
+            Type::addType('bigquerydate', 'MysqlToGoogleBigQuery\Doctrine\BigQueryDateType');
+        }
 
         // Map types to classes
         $this->conn->getDatabasePlatform()->registerDoctrineTypeMapping('date', 'bigquerydate');
@@ -64,14 +66,14 @@ class Mysql
     public function getCountTableRows(string $databaseName, string $tableName, $columnName = null, $columnValue = null)
     {
         if ($columnName && $columnValue) {
-            $mysqlQueryResult = $this->getConnection($databaseName)->query(
+            $result = $this->getConnection($databaseName)->executeQuery(
                 'SELECT COUNT(*) AS count FROM `' . $tableName . '` WHERE ' . $columnName . ' >= "' . $columnValue . '"'
             );
         } else {
-            $mysqlQueryResult = $this->getConnection($databaseName)->query('SELECT COUNT(*) AS count FROM `' . $tableName . '`');
+            $result = $this->getConnection($databaseName)->executeQuery('SELECT COUNT(*) AS count FROM `' . $tableName . '`');
         }
 
-        while ($row = $mysqlQueryResult->fetch()) {
+        while ($row = $result->fetchAssociative()) {
             return (int) $row['count'];
         }
 
@@ -87,9 +89,9 @@ class Mysql
      */
     public function getMaxColumnValue(string $databaseName, string $tableName, string $columnName)
     {
-        $mysqlQueryResult = $this->getConnection($databaseName)->query('SELECT MAX(' . $columnName . ') AS columnMax FROM `' . $tableName . '`');
+        $result = $this->getConnection($databaseName)->executeQuery('SELECT MAX(' . $columnName . ') AS columnMax FROM `' . $tableName . '`');
 
-        while ($row = $mysqlQueryResult->fetch()) {
+        while ($row = $result->fetchAssociative()) {
             return $row['columnMax'];
         }
 
@@ -105,10 +107,9 @@ class Mysql
     public function getTableColumns($databaseName, $tableName)
     {
         $mysqlConnection = $this->getConnection($databaseName);
-        $mysqlPlatform = $mysqlConnection->getDatabasePlatform();
-        $mysqlSchemaManager = $mysqlConnection->getSchemaManager();
+        $mysqlSchemaManager = $mysqlConnection->createSchemaManager();
 
-        $mysqlTableDetails = $mysqlSchemaManager->listTableDetails($tableName);
+        $mysqlTableDetails = $mysqlSchemaManager->introspectTable($tableName);
         return $mysqlTableDetails->getColumns();
     }
 }

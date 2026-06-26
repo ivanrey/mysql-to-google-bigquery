@@ -2,7 +2,7 @@
 
 namespace MysqlToGoogleBigQuery\Database;
 
-use Doctrine\DBAL\Types\Type;
+use Doctrine\DBAL\Types\Types;
 use Google\Cloud\BigQuery\BigQueryClient;
 
 class BigQuery
@@ -33,39 +33,42 @@ class BigQuery
                     $type = 'DATETIME';
                     break;
 
-                case Type::BIGINT:
+                case Types::BIGINT:
                     $type = 'INTEGER';
                     break;
 
-                case Type::BOOLEAN:
+                case Types::BOOLEAN:
                     $type = 'BOOLEAN';
                     break;
 
-                case Type::DATE:
+                case Types::DATE_MUTABLE:
+                case Types::DATE_IMMUTABLE:
                     $type = 'DATETIME';
                     break;
 
-                case Type::DATETIME:
+                case Types::DATETIME_MUTABLE:
+                case Types::DATETIME_IMMUTABLE:
                     $type = 'DATETIME';
                     break;
 
-                case Type::DECIMAL:
+                case Types::DECIMAL:
                     $type = 'FLOAT';
                     break;
 
-                case Type::FLOAT:
+                case Types::FLOAT:
                     $type = 'FLOAT';
                     break;
 
-                case Type::INTEGER:
+                case Types::INTEGER:
                     $type = 'INTEGER';
                     break;
 
-                case Type::SMALLINT:
+                case Types::SMALLINT:
                     $type = 'INTEGER';
                     break;
 
-                case Type::TIME:
+                case Types::TIME_MUTABLE:
+                case Types::TIME_IMMUTABLE:
                     $type = 'TIME';
                     break;
 
@@ -128,8 +131,8 @@ class BigQuery
     {
         $client = $this->getClient();
         $result = $client->runQuery(
-            'SELECT MAX(' . $columnName . ') AS columnMax FROM ' . $_ENV['BQ_DATASET'] . '.' . $tableName . ' WHERE created_at >= \''. date('Y-m-d', 
-		strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) .'\'' 
+            'SELECT MAX(' . $columnName . ') AS columnMax FROM ' . $_ENV['BQ_DATASET'] . '.' . $tableName . ' WHERE created_at >= \''. date('Y-m-d',
+		strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) .'\''
             , ['useLegacySql' => false]);
 
         $isComplete = $result->isComplete();
