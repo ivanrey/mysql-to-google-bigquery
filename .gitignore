@@ -5,6 +5,7 @@ service-account-key.json
 *-key.json
 .env
 .env.*
+.env-*
 !.env.sample
 .idea
 nohup.out
