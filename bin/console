@@ -21,5 +21,9 @@ $application = new Application();
 
 // Lista de comandos
 $application->add(new SyncCommand());
-
-$application->run();
+try{
+        $application->run();
+}catch(Throwable $e){
+	echo $e->getTraceAsString();
+        throw $e;
+}

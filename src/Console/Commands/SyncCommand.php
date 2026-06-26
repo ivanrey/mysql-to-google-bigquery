@@ -69,6 +69,7 @@ class SyncCommand extends Command
             $bigQueryTableName = $input->getArgument('table-name');
         }
 
+try{
         $service = $container->get('MysqlToGoogleBigQuery\Services\SyncService');
         $service->execute(
             $databaseName,
@@ -80,5 +81,9 @@ class SyncCommand extends Command
             $ignoreColumns,
             $output
         );
+}catch(Throwable $e){
+ echo $e->getTraceAsString();
+throw $e;  
+}
     }
 }
