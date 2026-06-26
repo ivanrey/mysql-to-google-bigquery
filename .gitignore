@@ -15,5 +15,5 @@ nohup.out
 .phpunit.result.cache
 
 # Composer-generated vendor binaries (bin-dir = bin/); only bin/console is ours
-/bin/phpunit
-/bin/php-parse
+/bin/*
+!/bin/console
