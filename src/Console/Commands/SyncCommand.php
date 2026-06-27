@@ -13,7 +13,7 @@ class SyncCommand extends Command
     /**
      * {@inheritdoc}
      */
-    protected function configure()
+    protected function configure(): void
     {
         $this
             ->setName('sync')
@@ -41,7 +41,7 @@ class SyncCommand extends Command
     /**
      * {@inheritdoc}
      */
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $container = \DI\ContainerBuilder::buildDevContainer();
 
@@ -83,7 +83,8 @@ try{
         );
 }catch(Throwable $e){
  echo $e->getTraceAsString();
-throw $e;  
+throw $e;
 }
+        return Command::SUCCESS;
     }
 }

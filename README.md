@@ -2,6 +2,10 @@
 
 <h1 align="center">MySQL to Google BigQuery Sync Tool</h1>
 
+<p align="center">
+  <a href="https://github.com/ivanrey/mysql-to-google-bigquery/actions/workflows/tests.yml"><img src="https://github.com/ivanrey/mysql-to-google-bigquery/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+</p>
+
 ## Table of Contents
 
 + [How it works](#how-it-works)

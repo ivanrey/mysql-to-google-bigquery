@@ -89,6 +89,22 @@ bin/console sync <tabla> --delete-table   # borra y recrea (full dump)
 - No introduzcas deprecations de PHP 8.1 (ver issue #7); de hecho, ayuda a eliminarlos.
 - No subas secretos: `.env*` (excepto `.env.sample`) y `*-key.json` están en `.gitignore`.
 
+## Tests (obligatorio)
+
+Toda issue/PR debe entregar **tests unitarios** que cubran su cambio — es parte
+del Definition of Done.
+
+```bash
+composer test        # corre la suite (PHPUnit)
+```
+
+- Los tests viven en `tests/` (namespace `MysqlToGoogleBigQuery\Tests\`).
+- Aísla las dependencias externas (`BigQuery`, `Mysql`) con mocks/dobles; no se
+  golpean servicios reales en los tests unitarios.
+- Prioriza cubrir la lógica pura (p.ej. `SyncService::processRow()`).
+- La infraestructura de testing se monta en la issue #10 (si aún no existe `composer test`,
+  esa issue es prerequisito).
+
 ## Flujo de trabajo
 
 - Se trabaja en local y se hace `git push origin master` al fork.
