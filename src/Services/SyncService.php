@@ -366,30 +366,16 @@ protected function sendBatchUnbuffered(
 
     /**
      * Wait for a BigQuery Job
-     * @param  Google\Cloud\BigQuery\Job $job BigQuery Job
+     * @param  \Google\Cloud\BigQuery\Job $job BigQuery Job
      */
     protected function waitJob($job)
     {
-        $errors = [];
+        // google/cloud-bigquery keeps the job location in its identity, so
+        // polling works natively against regional (non-US/EU) datasets
+        $job->waitUntilComplete();
+
         $jobInfo = $job->info();
-
-        // google/cloud v0.11.1 doesn't keep the job location in its identity,
-        // so reload() issues a jobs.get without location and fails (404) for
-        // jobs that run in a non-US/EU regional location. We read the location
-        // from the initial insert response and pass it explicitly on reload.
-        // Requires the location query param patched into the service definition
-        // (see patches/google-cloud-bigquery-job-location.patch).
-        $options = [];
-        if (isset($jobInfo['jobReference']['location'])) {
-            $options['location'] = $jobInfo['jobReference']['location'];
-        }
-
-        while ($jobInfo['status']['state'] === 'RUNNING') {
-            echo '.';
-            $jobInfo = $job->reload($options);
-            // Wait a second to retry
-            sleep(1);
-        }
+        $errors = [];
 
         if (array_key_exists('errors', $jobInfo['status'])
             && is_array($jobInfo['status']['errors'])

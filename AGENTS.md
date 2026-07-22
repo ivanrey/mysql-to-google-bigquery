@@ -31,7 +31,6 @@ src/Services/SyncService          Lógica de sincronización (batches, unbuffere
 src/Database/Mysql                Conexión MySQL (Doctrine DBAL) y tipos custom
 src/Database/BigQuery             Cliente BigQuery, queries, load jobs
 src/Doctrine/                     Tipos Doctrine custom (date / datetime para BigQuery)
-patches/                          Parche al vendor google/cloud (ver abajo)
 ```
 
 ## Configuración
@@ -52,26 +51,15 @@ CACHE_DIR           Directorio para los JSON temporales
 
 ## Entorno de desarrollo
 
-- **PHP 8.1**. Las dependencias son antiguas y declaran PHP ≤7, así que hoy:
+- **PHP 8.1**, stack de dependencias moderno (symfony 6.4, doctrine/dbal 3.8,
+  google/cloud-bigquery 1.x):
   ```bash
-  composer install --ignore-platform-reqs
+  composer install
   ```
-  (Eliminar ese flag es parte del backlog — issue #7.)
-- Tras `composer install` se aplica automáticamente el parche del vendor vía
-  `cweagans/composer-patches` (ver siguiente sección).
-
-## El parche de google/cloud (importante)
-
-`google/cloud` v0.11.1 no soporta `location` de forma nativa: `Job::reload()` y
-`QueryResults::reload()` hacen `GET` sin `location` y devuelven **404** para jobs en
-regiones no US/EU. Por eso:
-
-- `patches/google-cloud-bigquery-job-location.patch` añade el parámetro `location`
-  a `jobs.get` y `jobs.getQueryResults` en el service definition del vendor.
-- `SyncService::waitJob()` lee `jobReference.location` y lo pasa a `reload()`.
-
-Si tocas esto, recuerda que el parche se reaplica en cada `composer install`.
-La solución definitiva es modernizar la librería (issue #4).
+- El `location` (BQ_LOCATION) lo maneja nativamente `google/cloud-bigquery`:
+  se pasa al `BigQueryClient` y viaja en la identidad de cada job, así que el
+  polling funciona contra datasets regionales (no US/EU) sin workarounds.
+  (Históricamente esto requería un parche al vendor — eliminado en la issue #4.)
 
 ## Uso
 

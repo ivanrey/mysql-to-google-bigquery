@@ -7,14 +7,22 @@ use Google\Cloud\BigQuery\BigQueryClient;
 
 class BigQuery
 {
-    protected $client;
+    protected ?BigQueryClient $client = null;
     protected $tablesMetadata = [];
+
+    /**
+     * Allow injecting a pre-built client (used by tests)
+     */
+    public function __construct(?BigQueryClient $client = null)
+    {
+        $this->client = $client;
+    }
 
     /**
      * Create a BigQuery Table based on MySQL Table columns
      * @param string $tableName Table Name
      * @param array $mysqlTableColumns Array of Doctrine\DBAL\Schema\Column
-     * @return Google\Cloud\BigQuery\Table Table object
+     * @return \Google\Cloud\BigQuery\Table Table object
      */
     public function createTable($tableName, $mysqlTableColumns)
     {
@@ -83,8 +91,7 @@ class BigQuery
             ];
         }
 
-        $client = $this->getClient()/** @var $dataset DataSet */
-        ;
+        $client = $this->getClient();
         $dataset = $client->dataset($_ENV['BQ_DATASET']);
 
         return $dataset->createTable($tableName, [
@@ -130,17 +137,14 @@ class BigQuery
     public function getMaxColumnValue(string $tableName, string $columnName)
     {
         $client = $this->getClient();
-        $result = $client->runQuery(
-            'SELECT MAX(' . $columnName . ') AS columnMax FROM ' . $_ENV['BQ_DATASET'] . '.' . $tableName . ' WHERE created_at >= \''. date('Y-m-d',
-		strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) .'\''
-            , ['useLegacySql' => false]);
 
-        $isComplete = $result->isComplete();
-        while (!$isComplete) {
-            sleep(1);
-            $result->reload();
-            $isComplete = $result->isComplete();
-        }
+        $sql = 'SELECT MAX(`' . $columnName . '`) AS columnMax'
+            . ' FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`'
+            . ' WHERE created_at >= \'' . date('Y-m-d', strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) . '\'';
+
+        // runQuery() blocks until the query completes; the job location is
+        // propagated natively by the client (no manual reload loop needed)
+        $result = $client->runQuery($client->query($sql));
 
         foreach ($result->rows() as $row) {
             return $row['columnMax'];
@@ -154,7 +158,7 @@ class BigQuery
      * @param string $tableName Table name
      * @param string $columnName Column name
      * @param string $columnValue Value to be deleted
-     * @return string               Result
+     * @return \Google\Cloud\BigQuery\QueryResults Result
      */
     public function deleteColumnValue(string $tableName, string $columnName, string $columnValue)
     {
@@ -163,23 +167,14 @@ class BigQuery
         // Non numeric values needs ""
         if (!is_numeric($columnValue)) {
             $columnValue = '"' . $columnValue . '"';
-	}
-
-	$date = date('Y-m-d', strtotime('-3 month') );
-
-        $result = $client->runQuery(
-            'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
-	    ' WHERE `' . $columnName . '` = ' . $columnValue. " AND created_at >= '$date'",
-            ['useLegacySql' => false]
-        );
-        $isComplete = $result->isComplete();
-        while (!$isComplete) {
-            sleep(1);
-            $result->reload();
-            $isComplete = $result->isComplete();
         }
 
-        return $result;
+        $date = date('Y-m-d', strtotime('-3 month'));
+
+        $sql = 'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
+            ' WHERE `' . $columnName . '` = ' . $columnValue . " AND created_at >= '$date'";
+
+        return $client->runQuery($client->query($sql));
     }
 
     /**
@@ -206,8 +201,8 @@ class BigQuery
         return $this->client = new BigQueryClient([
             'projectId' => $_ENV['BQ_PROJECT_ID'],
             'keyFile' => json_decode(file_get_contents($keyFilePath), true),
-	    'scopes' => [BigQueryClient::SCOPE],
-    	    'location' => $_ENV['BQ_LOCATION'] ?? 'US',
+            'scopes' => [BigQueryClient::SCOPE],
+            'location' => $_ENV['BQ_LOCATION'] ?? 'US',
         ]);
     }
 
@@ -220,9 +215,13 @@ class BigQuery
     public function getTablesMetadata()
     {
         $client = $this->getClient();
-        $queryResults = $client->runQuery('SELECT * FROM ' . $_ENV['BQ_DATASET'] . '.__TABLES__;', [
-            'useQueryCache' => false
-        ]);
+
+        // __TABLES__ requires backticks under Standard SQL (the modern client
+        // defaults to Standard SQL; the old one ran this under Legacy SQL)
+        $query = $client->query('SELECT * FROM `' . $_ENV['BQ_DATASET'] . '.__TABLES__`')
+            ->useQueryCache(false);
+
+        $queryResults = $client->runQuery($query);
 
         foreach ($queryResults->rows() as $row) {
             $this->tablesMetadata[$row['table_id']] = $row;
@@ -235,7 +234,7 @@ class BigQuery
      * Load data to BigQuery reading it from JSON NEWLINE DELIMITED File
      * @param resource|string $file Resource or String (path) of JSON file
      * @param string $tableName Table Name
-     * @return Google\Cloud\BigQuery\Job            BigQuery Data Load Job
+     * @return \Google\Cloud\BigQuery\Job            BigQuery Data Load Job
      */
     public function loadFromJson($file, $tableName)
     {
@@ -243,16 +242,12 @@ class BigQuery
         $dataset = $client->dataset($_ENV['BQ_DATASET']);
         $table = $dataset->table($tableName);
 
-        $job = $table->load(
-            $file,
-            [
-                'jobConfig' => [
-                    'sourceFormat' => 'NEWLINE_DELIMITED_JSON'
-                ]
-            ]
-        );
+        $loadConfig = $table->load($file)
+            ->sourceFormat('NEWLINE_DELIMITED_JSON');
 
-        return $job;
+        // startJob() returns without waiting: SyncService overlaps the upload
+        // of one batch with the generation of the next one
+        return $client->startJob($loadConfig);
     }
 
     /**
