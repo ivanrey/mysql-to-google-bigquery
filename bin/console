@@ -13,7 +13,7 @@ use MysqlToGoogleBigQuery\Console\Commands\SyncCommand;
 
 // Load the .env definitions
 if (file_exists(getcwd(). '/.env')) {
-    $dotenv = new Dotenv\Dotenv(getcwd());
+    $dotenv = Dotenv\Dotenv::createImmutable(getcwd());
     $dotenv->load();
 }
 

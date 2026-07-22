@@ -9,3 +9,11 @@ service-account-key.json
 !.env.sample
 .idea
 nohup.out
+
+# PHPUnit
+.phpunit.cache/
+.phpunit.result.cache
+
+# Composer-generated vendor binaries (bin-dir = bin/); only bin/console is ours
+/bin/*
+!/bin/console
