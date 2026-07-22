@@ -68,6 +68,11 @@ bin/console sync <tabla>                  # sincroniza
 bin/console sync <tabla> --order-column id # incremental por columna
 bin/console sync <tabla> --create-table   # crea la tabla en BigQuery si no existe
 bin/console sync <tabla> --delete-table   # borra y recrea (full dump)
+bin/console sync <tabla> --delete-table --un-buffer # full dump en streaming (tablas
+                                          # grandes): NO borra la tabla, reemplaza la
+                                          # data atómicamente (WRITE_TRUNCATE) y
+                                          # conserva el esquema existente
+bin/console sync <tabla> --no-data        # solo esquema, no copia datos
 ```
 
 ## Convenciones

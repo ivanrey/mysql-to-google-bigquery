@@ -234,9 +234,12 @@ class BigQuery
      * Load data to BigQuery reading it from JSON NEWLINE DELIMITED File
      * @param resource|string $file Resource or String (path) of JSON file
      * @param string $tableName Table Name
+     * @param bool $truncate Replace the table data atomically (WRITE_TRUNCATE)
+     *                       instead of appending; the swap happens on job
+     *                       commit, so the table is never left empty
      * @return \Google\Cloud\BigQuery\Job            BigQuery Data Load Job
      */
-    public function loadFromJson($file, $tableName)
+    public function loadFromJson($file, $tableName, bool $truncate = false)
     {
         $client = $this->getClient();
         $dataset = $client->dataset($_ENV['BQ_DATASET']);
@@ -244,6 +247,10 @@ class BigQuery
 
         $loadConfig = $table->load($file)
             ->sourceFormat('NEWLINE_DELIMITED_JSON');
+
+        if ($truncate) {
+            $loadConfig = $loadConfig->writeDisposition('WRITE_TRUNCATE');
+        }
 
         // startJob() returns without waiting: SyncService overlaps the upload
         // of one batch with the generation of the next one

@@ -93,6 +93,63 @@ class SyncCommandTest extends TestCase
         }
     }
 
+    public function testNoDataAndUnBufferFlagsReachTheService(): void
+    {
+        $service = $this->createMock(SyncService::class);
+        $service->expects($this->once())
+            ->method('execute')
+            ->with(
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                true,                // --delete-table
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                true,                // --no-data
+                true                 // --un-buffer
+            );
+
+        $tester = $this->applicationTester($service);
+        $exitCode = $tester->run([
+            'command' => 'sync',
+            'table-name' => 'users',
+            '--database-name' => 'mydb',
+            '--delete-table' => true,
+            '--no-data' => true,
+            '--un-buffer' => true,
+        ]);
+
+        $this->assertSame(0, $exitCode);
+    }
+
+    public function testFlagsDefaultToFalse(): void
+    {
+        $service = $this->createMock(SyncService::class);
+        $service->expects($this->once())
+            ->method('execute')
+            ->with(
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                false,               // --no-data absent
+                false                // --un-buffer absent
+            );
+
+        $tester = $this->applicationTester($service);
+        $tester->run([
+            'command' => 'sync',
+            'table-name' => 'users',
+            '--database-name' => 'mydb',
+        ]);
+    }
+
     public function testDatabaseNameFallsBackToEnv(): void
     {
         $_ENV['DB_DATABASE_NAME'] = 'env_db';

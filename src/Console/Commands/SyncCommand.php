@@ -31,6 +31,13 @@ class SyncCommand extends Command
             ->addArgument('table-name', InputArgument::REQUIRED, 'The name of the table you want to sync')
             ->addOption('create-table', 'c', InputOption::VALUE_NONE, 'If BigQuery table doesn\'t exist, create it')
             ->addOption('delete-table', 'd', InputOption::VALUE_NONE, 'Delete the BigQuery table before syncing')
+            ->addOption('no-data', null, InputOption::VALUE_NONE, 'If specified do not copy data')
+            ->addOption(
+                'un-buffer',
+                null,
+                InputOption::VALUE_NONE,
+                'Full dump streaming the MySQL table (unbuffered). Requires --delete-table; the reload is atomic (WRITE_TRUNCATE), the table is never left empty'
+            )
             ->addOption(
                 'order-column',
                 'o',
@@ -89,7 +96,9 @@ class SyncCommand extends Command
             $input->getOption('delete-table'),
             $orderColumn,
             $ignoreColumns,
-            $output
+            $output,
+            (bool) $input->getOption('no-data'),
+            (bool) $input->getOption('un-buffer')
         );
 
         return Command::SUCCESS;

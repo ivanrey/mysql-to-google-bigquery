@@ -173,6 +173,51 @@ class BigQueryTest extends TestCase
         $this->assertSame($job, $this->bigQuery->loadFromJson($file, 'users'));
     }
 
+    public function testLoadFromJsonWithTruncateSetsWriteTruncateDisposition(): void
+    {
+        $file = fopen('php://memory', 'r');
+
+        $loadConfig = $this->createMock(LoadJobConfiguration::class);
+        $loadConfig->method('sourceFormat')->willReturnSelf();
+
+        // Unbuffered full dump: data replaced atomically on job commit
+        $loadConfig->expects($this->once())
+            ->method('writeDisposition')
+            ->with('WRITE_TRUNCATE')
+            ->willReturnSelf();
+
+        $table = $this->createMock(Table::class);
+        $table->method('load')->willReturn($loadConfig);
+
+        $dataset = $this->createMock(Dataset::class);
+        $dataset->method('table')->willReturn($table);
+        $this->client->method('dataset')->willReturn($dataset);
+        $this->client->method('startJob')->willReturn($this->createMock(Job::class));
+
+        $this->bigQuery->loadFromJson($file, 'users', true);
+    }
+
+    public function testLoadFromJsonDefaultsToAppendWithoutTruncate(): void
+    {
+        $file = fopen('php://memory', 'r');
+
+        $loadConfig = $this->createMock(LoadJobConfiguration::class);
+        $loadConfig->method('sourceFormat')->willReturnSelf();
+
+        // Incremental/buffered mode keeps BigQuery's default (append)
+        $loadConfig->expects($this->never())->method('writeDisposition');
+
+        $table = $this->createMock(Table::class);
+        $table->method('load')->willReturn($loadConfig);
+
+        $dataset = $this->createMock(Dataset::class);
+        $dataset->method('table')->willReturn($table);
+        $this->client->method('dataset')->willReturn($dataset);
+        $this->client->method('startJob')->willReturn($this->createMock(Job::class));
+
+        $this->bigQuery->loadFromJson($file, 'users');
+    }
+
     public function testInjectedClientIsUsedInsteadOfBuildingOne(): void
     {
         // getClient() must return the injected client without touching env/key file
