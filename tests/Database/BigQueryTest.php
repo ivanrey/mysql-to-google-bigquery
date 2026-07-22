@@ -27,7 +27,12 @@ class BigQueryTest extends TestCase
 
     protected function tearDown(): void
     {
-        unset($_ENV['BQ_DATASET'], $_ENV['CREATED_AT_LOOKBACK']);
+        unset(
+            $_ENV['BQ_DATASET'],
+            $_ENV['CREATED_AT_LOOKBACK'],
+            $_ENV['CREATED_AT_LOOKBACK_USERS'],
+            $_ENV['CREATED_AT_LOOKBACK_USER_LOGS']
+        );
     }
 
     /**
@@ -86,6 +91,116 @@ class BigQueryTest extends TestCase
         $this->bigQuery->getMaxColumnValue('users', 'created_at');
 
         $expectedDate = date('Y-m-d', strtotime('-2 days'));
+        $this->assertStringContainsString("created_at >= '$expectedDate'", $sql);
+    }
+
+    public function testLookbackDefaultsToThreeMonths(): void
+    {
+        $this->assertSame('-3 month', $this->bigQuery->getCreatedAtLookback('users'));
+    }
+
+    public function testLookbackUsesGlobalEnvVariable(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK'] = '-15 days';
+
+        $this->assertSame('-15 days', $this->bigQuery->getCreatedAtLookback('users'));
+    }
+
+    public function testPerTableLookbackWinsOverGlobal(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK'] = '-15 days';
+        $_ENV['CREATED_AT_LOOKBACK_USERS'] = '-2 days';
+
+        $this->assertSame('-2 days', $this->bigQuery->getCreatedAtLookback('users'));
+        // Other tables still get the global value
+        $this->assertSame('-15 days', $this->bigQuery->getCreatedAtLookback('orders'));
+    }
+
+    public function testPerTableLookbackNormalizesTableName(): void
+    {
+        // Lowercase and hyphens in the table name map to _ in the env var
+        $_ENV['CREATED_AT_LOOKBACK_USER_LOGS'] = '-1 day';
+
+        $this->assertSame('-1 day', $this->bigQuery->getCreatedAtLookback('user-logs'));
+        $this->assertSame('-1 day', $this->bigQuery->getCreatedAtLookback('User_Logs'));
+    }
+
+    public function testInvalidLookbackFailsWithClearError(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK'] = 'not-a-date';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('CREATED_AT_LOOKBACK');
+
+        $this->bigQuery->getCreatedAtLookback('users');
+    }
+
+    public function testEmptyGlobalLookbackFallsBackToDefault(): void
+    {
+        // A bare `CREATED_AT_LOOKBACK=` line loads '' into $_ENV; it must not
+        // abort the sync, it must degrade to the default
+        $_ENV['CREATED_AT_LOOKBACK'] = '';
+
+        $this->assertSame('-3 month', $this->bigQuery->getCreatedAtLookback('users'));
+    }
+
+    public function testWhitespaceOnlyLookbackFallsBackToDefault(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK'] = '   ';
+
+        $this->assertSame('-3 month', $this->bigQuery->getCreatedAtLookback('users'));
+    }
+
+    public function testEmptyPerTableLookbackFallsBackToGlobal(): void
+    {
+        // A blank per-table override must not shadow a valid global value
+        $_ENV['CREATED_AT_LOOKBACK_USERS'] = '';
+        $_ENV['CREATED_AT_LOOKBACK'] = '-5 days';
+
+        $this->assertSame('-5 days', $this->bigQuery->getCreatedAtLookback('users'));
+    }
+
+    public function testLookbackValueIsTrimmed(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK'] = '  -5 days  ';
+
+        $this->assertSame('-5 days', $this->bigQuery->getCreatedAtLookback('users'));
+    }
+
+    public function testFutureLookbackIsRejected(): void
+    {
+        // '8 days' (missing the '-') resolves to a future date; left unchecked
+        // it would match no rows and trigger a full re-dump -> duplicates
+        $_ENV['CREATED_AT_LOOKBACK'] = '8 days';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('future');
+
+        $this->bigQuery->getCreatedAtLookback('users');
+    }
+
+    public function testInvalidPerTableLookbackNamesTheOffendingVariable(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK_USERS'] = '???';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('CREATED_AT_LOOKBACK_USERS');
+
+        $this->bigQuery->getCreatedAtLookback('users');
+    }
+
+    public function testDeleteColumnValueHonorsCreatedAtLookback(): void
+    {
+        $_ENV['CREATED_AT_LOOKBACK'] = '-5 days';
+
+        $this->expectQuery($sql);
+        $this->client->method('runQuery')->willReturn($this->queryResultsWithRows([]));
+
+        $this->bigQuery->deleteColumnValue('users', 'id', '42');
+
+        // The delete must look back the same window as getMaxColumnValue,
+        // otherwise duplicates outside its window would survive
+        $expectedDate = date('Y-m-d', strtotime('-5 days'));
         $this->assertStringContainsString("created_at >= '$expectedDate'", $sql);
     }
 

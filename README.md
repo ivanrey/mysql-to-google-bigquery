@@ -73,6 +73,30 @@ DB_HOST=mysql-host
 IGNORE_COLUMNS=password,hidden_column,another_column
 ```
 
+### Incremental sync and the `created_at` column
+
+The incremental sync (`--order-column` / `ORDER_COLUMN`) filters its BigQuery
+queries by a `created_at` column to limit the scanned data, so **every table
+synced incrementally must have a `created_at` column** (the sync fails early
+with a clear error if it is missing or listed in `IGNORE_COLUMNS`). Tables
+without it can still be synced with `--un-buffer --delete-table` (full dump).
+
+How far back those filters look is configurable (any `strtotime()`-parseable
+expression):
+
+```text
+# Global lookback window, default: -3 month. Must look backwards
+# (a future expression like "8 days" is rejected). A blank value falls
+# back to the default.
+CREATED_AT_LOOKBACK=-8 days
+
+# Per-table override: CREATED_AT_LOOKBACK_<TABLE>, where <TABLE> is the
+# *BigQuery* table name (the one the queries filter on, i.e. the
+# --bigquery-table-name if you set it, otherwise the source table name),
+# uppercased with non-alphanumeric characters replaced by "_"
+CREATED_AT_LOOKBACK_USER_LOGS=-30 days
+```
+
 PS: To create the `Google Service Account JSON Key File`, access [https://console.cloud.google.com/apis/credentials/serviceaccountkey](https://console.cloud.google.com/apis/credentials/serviceaccountkey)
 
 Run:

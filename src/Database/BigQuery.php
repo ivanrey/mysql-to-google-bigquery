@@ -129,6 +129,56 @@ class BigQuery
     }
 
     /**
+     * Resolve the created_at lookback window for a table.
+     *
+     * Precedence: CREATED_AT_LOOKBACK_<TABLE> (BigQuery table name uppercased,
+     * non-alphanumerics replaced by "_") > CREATED_AT_LOOKBACK > '-3 month'.
+     * The value is any strtotime()-parseable relative expression looking back.
+     *
+     * @param string $tableName BigQuery table name (the queries filter on it,
+     *                          so the override key is the destination name)
+     * @return string               strtotime()-parseable lookback expression
+     */
+    public function getCreatedAtLookback(string $tableName): string
+    {
+        $tableVar = 'CREATED_AT_LOOKBACK_' . preg_replace('/[^A-Z0-9]/', '_', strtoupper($tableName));
+
+        // Empty/whitespace-only values count as unset, so a bare
+        // `CREATED_AT_LOOKBACK=` line (or a blank per-table override) falls
+        // back to the next source instead of aborting the sync.
+        $lookback = '-3 month';
+        $source = 'CREATED_AT_LOOKBACK';
+        foreach ([$tableVar, 'CREATED_AT_LOOKBACK'] as $var) {
+            if (isset($_ENV[$var]) && trim($_ENV[$var]) !== '') {
+                $lookback = trim($_ENV[$var]);
+                $source = $var;
+                break;
+            }
+        }
+
+        $timestamp = strtotime($lookback);
+
+        if ($timestamp === false) {
+            throw new \InvalidArgumentException(
+                'Invalid lookback expression "' . $lookback . '" in ' . $source .
+                ': must be a strtotime()-parseable value like "-8 days" or "-3 month"'
+            );
+        }
+
+        // A future window (e.g. "8 days" missing its "-") would match no rows,
+        // making getMaxColumnValue() return false and silently triggering a
+        // full re-dump that duplicates the whole table. Reject it up front.
+        if ($timestamp > time()) {
+            throw new \InvalidArgumentException(
+                'Lookback expression "' . $lookback . '" in ' . $source .
+                ' resolves to a future date: it must look backwards (e.g. "-8 days", not "8 days")'
+            );
+        }
+
+        return $lookback;
+    }
+
+    /**
      * Get the maximum value of a column
      * @param string $tableName Table name
      * @param string $columnName Column name
@@ -140,7 +190,7 @@ class BigQuery
 
         $sql = 'SELECT MAX(`' . $columnName . '`) AS columnMax'
             . ' FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`'
-            . ' WHERE created_at >= \'' . date('Y-m-d', strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) . '\'';
+            . ' WHERE created_at >= \'' . date('Y-m-d', strtotime($this->getCreatedAtLookback($tableName))) . '\'';
 
         // runQuery() blocks until the query completes; the job location is
         // propagated natively by the client (no manual reload loop needed)
@@ -169,7 +219,9 @@ class BigQuery
             $columnValue = '"' . $columnValue . '"';
         }
 
-        $date = date('Y-m-d', strtotime('-3 month'));
+        // Same lookback as getMaxColumnValue(): if the delete looked back a
+        // shorter window than the max lookup, duplicates could survive
+        $date = date('Y-m-d', strtotime($this->getCreatedAtLookback($tableName)));
 
         $sql = 'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
             ' WHERE `' . $columnName . '` = ' . $columnValue . " AND created_at >= '$date'";
