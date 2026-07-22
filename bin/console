@@ -21,9 +21,7 @@ $application = new Application();
 
 // Lista de comandos
 $application->add(new SyncCommand());
-try{
-        $application->run();
-}catch(Throwable $e){
-	echo $e->getTraceAsString();
-        throw $e;
-}
+
+// Symfony Console ya formatea las excepciones (una sola traza, legible con -v)
+// y devuelve un código de salida distinto de 0 en caso de error
+$application->run();

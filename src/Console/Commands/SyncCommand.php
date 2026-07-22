@@ -11,6 +11,15 @@ use Symfony\Component\Console\Output\OutputInterface;
 class SyncCommand extends Command
 {
     /**
+     * Allow injecting the service (used by tests); by default it is
+     * resolved from the DI container on execute()
+     */
+    public function __construct(private ?SyncService $syncService = null)
+    {
+        parent::__construct();
+    }
+
+    /**
      * {@inheritdoc}
      */
     protected function configure(): void
@@ -43,8 +52,6 @@ class SyncCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $container = \DI\ContainerBuilder::buildDevContainer();
-
         $ignoreColumns = $input->getOption('ignore-column');
 
         if (empty($ignoreColumns) && isset($_ENV['IGNORE_COLUMNS'])) {
@@ -69,8 +76,11 @@ class SyncCommand extends Command
             $bigQueryTableName = $input->getArgument('table-name');
         }
 
-try{
-        $service = $container->get('MysqlToGoogleBigQuery\Services\SyncService');
+        // Errors propagate to Symfony Console, which reports them once
+        // (readable, with trace under -v) and exits with a non-zero code
+        $service = $this->syncService
+            ?? \DI\ContainerBuilder::buildDevContainer()->get(SyncService::class);
+
         $service->execute(
             $databaseName,
             $input->getArgument('table-name'),
@@ -81,10 +91,7 @@ try{
             $ignoreColumns,
             $output
         );
-}catch(Throwable $e){
- echo $e->getTraceAsString();
-throw $e;
-}
+
         return Command::SUCCESS;
     }
 }
