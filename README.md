@@ -85,11 +85,15 @@ How far back those filters look is configurable (any `strtotime()`-parseable
 expression):
 
 ```text
-# Global lookback window, default: -3 month
+# Global lookback window, default: -3 month. Must look backwards
+# (a future expression like "8 days" is rejected). A blank value falls
+# back to the default.
 CREATED_AT_LOOKBACK=-8 days
 
-# Per-table override: CREATED_AT_LOOKBACK_<TABLE> (table name uppercased,
-# non-alphanumeric characters replaced by "_")
+# Per-table override: CREATED_AT_LOOKBACK_<TABLE>, where <TABLE> is the
+# *BigQuery* table name (the one the queries filter on, i.e. the
+# --bigquery-table-name if you set it, otherwise the source table name),
+# uppercased with non-alphanumeric characters replaced by "_"
 CREATED_AT_LOOKBACK_USER_LOGS=-30 days
 ```
 
