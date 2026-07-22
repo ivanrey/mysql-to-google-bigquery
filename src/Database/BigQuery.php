@@ -129,6 +129,38 @@ class BigQuery
     }
 
     /**
+     * Resolve the created_at lookback window for a table.
+     *
+     * Precedence: CREATED_AT_LOOKBACK_<TABLE> (table name uppercased,
+     * non-alphanumerics replaced by "_") > CREATED_AT_LOOKBACK > '-3 month'.
+     * The value is any strtotime()-parseable relative expression.
+     *
+     * @param string $tableName Table name
+     * @return string               strtotime()-parseable lookback expression
+     */
+    public function getCreatedAtLookback(string $tableName): string
+    {
+        $tableVar = 'CREATED_AT_LOOKBACK_' . preg_replace('/[^A-Z0-9]/', '_', strtoupper($tableName));
+
+        if (isset($_ENV[$tableVar])) {
+            $lookback = $_ENV[$tableVar];
+            $source = $tableVar;
+        } else {
+            $lookback = $_ENV['CREATED_AT_LOOKBACK'] ?? '-3 month';
+            $source = 'CREATED_AT_LOOKBACK';
+        }
+
+        if (strtotime($lookback) === false) {
+            throw new \InvalidArgumentException(
+                'Invalid lookback expression "' . $lookback . '" in ' . $source .
+                ': must be a strtotime()-parseable value like "-8 days" or "-3 month"'
+            );
+        }
+
+        return $lookback;
+    }
+
+    /**
      * Get the maximum value of a column
      * @param string $tableName Table name
      * @param string $columnName Column name
@@ -140,7 +172,7 @@ class BigQuery
 
         $sql = 'SELECT MAX(`' . $columnName . '`) AS columnMax'
             . ' FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`'
-            . ' WHERE created_at >= \'' . date('Y-m-d', strtotime($_ENV['CREATED_AT_LOOKBACK'] ?? '-8 days')) . '\'';
+            . ' WHERE created_at >= \'' . date('Y-m-d', strtotime($this->getCreatedAtLookback($tableName))) . '\'';
 
         // runQuery() blocks until the query completes; the job location is
         // propagated natively by the client (no manual reload loop needed)
@@ -169,7 +201,9 @@ class BigQuery
             $columnValue = '"' . $columnValue . '"';
         }
 
-        $date = date('Y-m-d', strtotime('-3 month'));
+        // Same lookback as getMaxColumnValue(): if the delete looked back a
+        // shorter window than the max lookup, duplicates could survive
+        $date = date('Y-m-d', strtotime($this->getCreatedAtLookback($tableName)));
 
         $sql = 'DELETE FROM `' . $_ENV['BQ_DATASET'] . '.' . $tableName . '`' .
             ' WHERE `' . $columnName . '` = ' . $columnValue . " AND created_at >= '$date'";

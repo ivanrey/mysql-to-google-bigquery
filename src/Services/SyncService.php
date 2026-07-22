@@ -108,6 +108,26 @@ class SyncService
         if (!$unbuffered && $orderColumn) {
             $output->writeln('<fg=green>Using order column "' . $orderColumn . '"</>');
 
+            // The incremental path filters BigQuery queries by created_at
+            // (see BigQuery::getMaxColumnValue/deleteColumnValue). Fail early
+            // with a clear error instead of an opaque BigQuery one mid-sync.
+            if (in_array('created_at', $ignoreColumns)) {
+                throw new \Exception(
+                    'The column \'created_at\' is being excluded with --ignore-column, but the ' .
+                    'incremental sync (--order-column) requires it in the BigQuery table for its ' .
+                    'time filter. Remove it from the ignored columns or use --un-buffer with --delete-table.'
+                );
+            }
+
+            $mysqlColumns = $this->mysql->getTableColumns($databaseName, $tableName);
+            if (!array_key_exists('created_at', $mysqlColumns)) {
+                throw new \Exception(
+                    'Table \'' . $tableName . '\' has no \'created_at\' column, required by the ' .
+                    'incremental sync time filter (--order-column). Add the column or use ' .
+                    '--un-buffer with --delete-table for a full dump.'
+                );
+            }
+
             $mysqlMaxColumnValue = $this->mysql->getMaxColumnValue($databaseName, $tableName, $orderColumn);
             $bigQueryMaxColumnValue = $this->bigQuery->getMaxColumnValue($bigQueryTableName, $orderColumn);
 
