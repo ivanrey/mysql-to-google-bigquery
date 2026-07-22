@@ -55,14 +55,36 @@ class SyncService
         bool $noData = false,
         bool $unbuffered = false
     ) {
-        if ($deleteTable) {
-            // Delete the BigQuery Table before any operation
-            if ($this->bigQuery->tableExists($bigQueryTableName)) {
-                $this->bigQuery->deleteTable($bigQueryTableName);
-            }
+        if ($unbuffered && !$deleteTable) {
+            // The unbuffered mode re-dumps the whole table; without an explicit
+            // opt-in a cron re-run would silently duplicate every row
+            throw new \InvalidArgumentException(
+                '--un-buffer re-dumps the whole table and requires --delete-table. ' .
+                'The reload is atomic (WRITE_TRUNCATE): the table is replaced on job commit, never left empty.'
+            );
+        }
 
-            // Create the table after deleting
-            $createTable = true;
+        if ($deleteTable) {
+            if ($unbuffered) {
+                // No physical delete: the load job runs with WRITE_TRUNCATE and
+                // atomically replaces the data, so there is no window where the
+                // table is missing or empty. Note the existing schema is kept;
+                // to pick up MySQL schema changes run a buffered --delete-table.
+                $output->writeln(
+                    '<fg=yellow>Warning: with --un-buffer the table is NOT recreated: ' .
+                    'only the data is replaced (atomic WRITE_TRUNCATE), the existing schema is kept. ' .
+                    'To regenerate the schema run --delete-table without --un-buffer.</>'
+                );
+                $createTable = true;
+            } else {
+                // Delete the BigQuery Table before any operation
+                if ($this->bigQuery->tableExists($bigQueryTableName)) {
+                    $this->bigQuery->deleteTable($bigQueryTableName);
+                }
+
+                // Create the table after deleting
+                $createTable = true;
+            }
         }
 
         if (!$this->bigQuery->tableExists($bigQueryTableName)) {
@@ -80,7 +102,7 @@ class SyncService
         if ( $noData )
         {
           $output->writeln("<fg=green>No data specified, will not sync data.</>");
-          exit;
+          return;
         }
 
         if (!$unbuffered && $orderColumn) {
@@ -123,7 +145,8 @@ class SyncService
         {
             	$mysqlCountTableRows = $this->mysql->getCountTableRows($databaseName, $tableName, $orderColumn, $bigQueryMaxColumnValue);
         }
-        $bigQueryCountTableRows = $orderColumn ? 0 : $this->bigQuery->getCountTableRows($bigQueryTableName, $orderColumn);
+        // The unbuffered full dump doesn't diff row counts, skip the metadata query
+        $bigQueryCountTableRows = ($orderColumn || $unbuffered) ? 0 : $this->bigQuery->getCountTableRows($bigQueryTableName, $orderColumn);
 
         if ( !$unbuffered )
         {
@@ -210,50 +233,55 @@ class SyncService
 
         $json = fopen($jsonFilePath, 'a+');
 
-        if ($orderColumn) {
-            if ($orderColumnOffset) {
-                $mysqlQueryResult = $mysqlConnection->executeQuery(
-                    'SELECT * FROM `' . $tableName . '`' .
-                    ' WHERE ' . $orderColumn . ' > "' . $orderColumnOffset . '"' .
-                    ' ORDER BY ' . $orderColumn .
-                    ' LIMIT '. $offset . ', ' . $limit
-                );
+        try {
+            if ($orderColumn) {
+                if ($orderColumnOffset) {
+                    $mysqlQueryResult = $mysqlConnection->executeQuery(
+                        'SELECT * FROM `' . $tableName . '`' .
+                        ' WHERE ' . $orderColumn . ' > "' . $orderColumnOffset . '"' .
+                        ' ORDER BY ' . $orderColumn .
+                        ' LIMIT '. $offset . ', ' . $limit
+                    );
+                } else {
+                    $mysqlQueryResult = $mysqlConnection->executeQuery(
+                        'SELECT * FROM `' . $tableName . '` ORDER BY ' . $orderColumn . ' LIMIT '. $offset . ', ' . $limit
+                    );
+                }
             } else {
-                $mysqlQueryResult = $mysqlConnection->executeQuery(
-                    'SELECT * FROM `' . $tableName . '` ORDER BY ' . $orderColumn . ' LIMIT '. $offset . ', ' . $limit
-                );
+                $mysqlQueryResult = $mysqlConnection->executeQuery('SELECT * FROM `' . $tableName . '` LIMIT ' . $offset . ', ' . $limit);
             }
-        } else {
-            $mysqlQueryResult = $mysqlConnection->executeQuery('SELECT * FROM `' . $tableName . '` LIMIT ' . $offset . ', ' . $limit);
+
+            while ($row = $mysqlQueryResult->fetchAssociative()) {
+                $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
+
+                // Google BigQuery needs JSON new line delimited file
+                // Each line of the file will be each MySQL row converted to JSON
+                fwrite($json, json_encode($row) . PHP_EOL);
+            }
+
+            // Rewind to the beginning of the JSON file
+            rewind($json);
+
+            // We have a job running, waits to send the next
+            if ($this->currentJob) {
+                $this->waitJob($this->currentJob);
+            }
+
+            // Send JSON to BigQuery
+            $job = $this->bigQuery->loadFromJson($json, $bigQueryTableName);
+
+            // This is the first job, waits for a first success to continue
+            if (! $this->currentJob) {
+                $this->waitJob($job);
+            }
+
+            $this->currentJob = $job;
+        } finally {
+            // Always clean the temp JSON up, even if the load job failed
+            if (file_exists($jsonFilePath)) {
+                unlink($jsonFilePath);
+            }
         }
-
-        while ($row = $mysqlQueryResult->fetchAssociative()) {
-            $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
-
-            // Google BigQuery needs JSON new line delimited file
-            // Each line of the file will be each MySQL row converted to JSON
-            fwrite($json, json_encode($row) . PHP_EOL);
-        }
-
-        // Rewind to the beginning of the JSON file
-        rewind($json);
-
-        // We have a job running, waits to send the next
-        if ($this->currentJob) {
-            $this->waitJob($this->currentJob);
-        }
-
-        // Send JSON to BigQuery
-        $job = $this->bigQuery->loadFromJson($json, $bigQueryTableName);
-
-        // This is the first job, waits for a first success to continue
-        if (! $this->currentJob) {
-            $this->waitJob($job);
-        }
-
-        $this->currentJob = $job;
-
-        unlink($jsonFilePath);
     }
 
     /**
@@ -293,17 +321,17 @@ class SyncService
         return $row;
     }
 
-/**
- * Send a batch of data UNBUFFERED
- *
- * https://www.php.net/manual/en/mysqlinfo.concepts.buffering.php
- *
- * @param  string $databaseName          Database name
- * @param  string $tableName             Table name
- * @param  string $bigQueryTableName     BigQuery Table name
- * @param  array  $ignoreColumns         Ignore columns from syncing
- */
-protected function sendBatchUnbuffered(
+    /**
+     * Send a batch of data UNBUFFERED
+     *
+     * https://www.php.net/manual/en/mysqlinfo.concepts.buffering.php
+     *
+     * @param  string $databaseName          Database name
+     * @param  string $tableName             Table name
+     * @param  string $bigQueryTableName     BigQuery Table name
+     * @param  array  $ignoreColumns         Ignore columns from syncing
+     */
+    protected function sendBatchUnbuffered(
         string $databaseName,
         string $tableName,
         string $bigQueryTableName,
@@ -322,45 +350,42 @@ protected function sendBatchUnbuffered(
 
         $json = fopen($jsonFilePath, 'a+');
 
-        // Run the unbuffered SELECT directly on the native PDO, NOT through the
-        // DBAL/facile-it connection. facile-it wraps executeQuery() in a retry
-        // loop that, on a "MySQL server has gone away", closes the connection
-        // and reconnects with a fresh PDO — that new PDO would NOT carry the
-        // MYSQL_ATTR_USE_BUFFERED_QUERY=false set below, so the query would run
-        // buffered and load the whole table into memory. Issuing it on the same
-        // PDO we set the attribute on keeps the stream truly unbuffered; a dead
-        // connection here fails loudly instead of silently buffering.
-        $pdo = $mysqlConnection->getNativeConnection();
-        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        try {
+            // Run the unbuffered SELECT directly on the native PDO, NOT through the
+            // DBAL/facile-it connection. facile-it wraps executeQuery() in a retry
+            // loop that, on a "MySQL server has gone away", closes the connection
+            // and reconnects with a fresh PDO — that new PDO would NOT carry the
+            // MYSQL_ATTR_USE_BUFFERED_QUERY=false set below, so the query would run
+            // buffered and load the whole table into memory. Issuing it on the same
+            // PDO we set the attribute on keeps the stream truly unbuffered; a dead
+            // connection here fails loudly instead of silently buffering.
+            $pdo = $mysqlConnection->getNativeConnection();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
 
-        $mysqlQueryResult = $pdo->query('SELECT * FROM `' . $tableName . '`');
+            $mysqlQueryResult = $pdo->query('SELECT * FROM `' . $tableName . '`');
 
-        while ($row = $mysqlQueryResult->fetch(\PDO::FETCH_ASSOC)) {
-            $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
+            while ($row = $mysqlQueryResult->fetch(\PDO::FETCH_ASSOC)) {
+                $row = $this->processRow($mysqlTableColumns, $mysqlPlatform, $ignoreColumns, $row);
 
-            // Google BigQuery needs JSON new line delimited file
-            // Each line of the file will be each MySQL row converted to JSON
-            fwrite($json, json_encode($row) . PHP_EOL);
-        }
+                // Google BigQuery needs JSON new line delimited file
+                // Each line of the file will be each MySQL row converted to JSON
+                fwrite($json, json_encode($row) . PHP_EOL);
+            }
 
-        // Rewind to the beginning of the JSON file
-        rewind($json);
+            // Rewind to the beginning of the JSON file
+            rewind($json);
 
-        // We have a job running, waits to send the next
-        if ($this->currentJob) {
-            $this->waitJob($this->currentJob);
-        }
+            // Full dump: replace the table data atomically (WRITE_TRUNCATE) so
+            // re-runs never duplicate rows and the table is never left empty
+            $job = $this->bigQuery->loadFromJson($json, $bigQueryTableName, true);
 
-        // Send JSON to BigQuery
-        $job = $this->bigQuery->loadFromJson($json, $bigQueryTableName);
-
-        // This is the first job, waits for a first success to continue
-        if (! $this->currentJob) {
             $this->waitJob($job);
+        } finally {
+            // Always clean the temp JSON up, even if the load job failed
+            if (file_exists($jsonFilePath)) {
+                unlink($jsonFilePath);
+            }
         }
-
-        $this->currentJob = $job;
-        unlink($jsonFilePath);
     }
 
 
