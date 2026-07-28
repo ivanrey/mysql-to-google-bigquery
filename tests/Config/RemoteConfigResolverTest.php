@@ -1,0 +1,88 @@
+<?php
+namespace MysqlToGoogleBigQuery\Tests\Config;
+
+use MysqlToGoogleBigQuery\Config\RemoteConfigResolver;
+use PHPUnit\Framework\TestCase;
+
+class RemoteConfigResolverTest extends TestCase
+{
+    private array $originalEnv;
+
+    protected function setUp(): void
+    {
+        $this->originalEnv = $_ENV;
+    }
+
+    protected function tearDown(): void
+    {
+        $_ENV = $this->originalEnv;
+    }
+
+    public function testReadsThroughTheReaderOfTheScheme(): void
+    {
+        $resolver = new RemoteConfigResolver(
+            new FakeConfigReader('sm', ['sm://db-pass' => 's3cret']),
+            new FakeConfigReader('pm', ['pm://client-a' => 'BQ_DATASET=from_parameter'])
+        );
+
+        $this->assertSame('s3cret', $resolver->read('sm://db-pass'));
+        $this->assertSame('BQ_DATASET=from_parameter', $resolver->read('pm://client-a'));
+    }
+
+    public function testEachReferenceIsReadOnlyOnce(): void
+    {
+        $reader = new FakeConfigReader('sm', ['sm://db-pass' => 's3cret']);
+        $resolver = new RemoteConfigResolver($reader);
+
+        $resolver->read('sm://db-pass');
+        $resolver->read('sm://db-pass');
+
+        $this->assertSame(1, $reader->reads);
+    }
+
+    public function testUnknownSchemeIsRejectedWithTheKnownOnes(): void
+    {
+        $resolver = new RemoteConfigResolver(new FakeConfigReader('sm'));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('sm://');
+
+        $resolver->read('vault://db-pass');
+    }
+
+    public function testOnlyRegisteredSchemesCountAsReferences(): void
+    {
+        $resolver = new RemoteConfigResolver(new FakeConfigReader('sm'));
+
+        $this->assertTrue($resolver->isReference('sm://db-pass'));
+        $this->assertFalse($resolver->isReference('pm://client-a'));
+        $this->assertFalse($resolver->isReference('/etc/keys/key.json'));
+        $this->assertFalse($resolver->isReference('plain-password'));
+        $this->assertFalse($resolver->isReference(null));
+    }
+
+    public function testEnvironmentReferencesAreReplacedByTheirValues(): void
+    {
+        $_ENV['DB_PASSWORD'] = 'sm://db-pass';
+        $_ENV['DB_USERNAME'] = 'reporting';
+
+        $resolver = new RemoteConfigResolver(new FakeConfigReader('sm', ['sm://db-pass' => 's3cret']));
+
+        $this->assertSame(['DB_PASSWORD'], $resolver->resolveEnvironmentVariables());
+        $this->assertSame('s3cret', $_ENV['DB_PASSWORD']);
+        // Plain values are left untouched
+        $this->assertSame('reporting', $_ENV['DB_USERNAME']);
+    }
+
+    public function testFailureNamesTheVariableAndTheReferenceButNotTheValue(): void
+    {
+        $_ENV['DB_PASSWORD'] = 'sm://missing';
+
+        $resolver = new RemoteConfigResolver(new FakeConfigReader('sm'));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Could not resolve DB_PASSWORD');
+
+        $resolver->resolveEnvironmentVariables();
+    }
+}

@@ -48,11 +48,11 @@ class BigQueryTest extends TestCase
     /**
      * Create a throwaway key file and return the directory holding it
      */
-    private function createKeyFile(): string
+    private function createKeyFile(string $contents = '{}'): string
     {
         $this->keyFileDir = sys_get_temp_dir() . '/bq-key-' . uniqid();
         mkdir($this->keyFileDir, 0777, true);
-        file_put_contents($this->keyFileDir . '/service-account-key.json', '{}');
+        file_put_contents($this->keyFileDir . '/service-account-key.json', $contents);
 
         return $this->keyFileDir;
     }
@@ -378,6 +378,51 @@ class BigQueryTest extends TestCase
         $_ENV['BQ_KEY_FILE'] = $envDir . '/service-account-key.json';
 
         $this->assertSame($envDir . '/service-account-key.json', $this->bigQuery->getKeyFilePath());
+    }
+
+    public function testWithoutKeyFileTheClientFallsBackToApplicationDefaultCredentials(): void
+    {
+        // No BQ_KEY_FILE: nothing to load, the host identity authenticates
+        $this->assertNull($this->bigQuery->getKeyFile());
+    }
+
+    public function testBlankKeyFileAlsoMeansApplicationDefaultCredentials(): void
+    {
+        $_ENV['BQ_KEY_FILE'] = '   ';
+
+        $this->assertNull($this->bigQuery->getKeyFile());
+    }
+
+    public function testKeyFileCanArriveAsAResolvedSecretInsteadOfAPath(): void
+    {
+        // BQ_KEY_FILE=sm://… already replaced by its payload: the key stays in
+        // memory and is never written to disk
+        $_ENV['BQ_KEY_FILE'] = '{"type":"service_account","client_email":"sync@example.com"}';
+
+        $this->assertSame(
+            ['type' => 'service_account', 'client_email' => 'sync@example.com'],
+            $this->bigQuery->getKeyFile()
+        );
+    }
+
+    public function testKeyFileIsStillReadFromDiskWhenItIsAPath(): void
+    {
+        $envDir = $this->createKeyFile('{"type":"service_account"}');
+        $_ENV[EnvironmentLoader::ENV_DIR] = $envDir;
+        $_ENV['BQ_KEY_FILE'] = 'service-account-key.json';
+
+        $this->assertSame(['type' => 'service_account'], $this->bigQuery->getKeyFile());
+    }
+
+    public function testInvalidKeyContentsFailWithoutEchoingTheCredential(): void
+    {
+        $_ENV['BQ_KEY_FILE'] = '{not really json';
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('is not valid JSON');
+        $this->expectExceptionMessageMatches('/^((?!not really json).)*$/s');
+
+        $this->bigQuery->getKeyFile();
     }
 
     public function testMissingKeyFileErrorNamesTheResolvedPath(): void

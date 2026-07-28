@@ -27,6 +27,7 @@ negocio ni a clientes concretos:
 ```
 bin/console                       Punto de entrada CLI (Symfony Console)
 src/Config/EnvironmentLoader      Selección y carga del .env del entorno (--env)
+src/Config/RemoteConfigResolver   Resuelve referencias sm:// y pm:// (Google Cloud)
 src/Console/Commands/SyncCommand  Comando `sync`
 src/Services/SyncService          Lógica de sincronización (batches, unbuffered, waitJob)
 src/Database/Mysql                Conexión MySQL (Doctrine DBAL) y tipos custom
@@ -41,6 +42,13 @@ Vía `.env` (cargado con `vlucas/phpdotenv`). Se elige con `--env=<nombre>`
 `--env-file=<ruta>`; sin ninguna de las dos se carga `<cwd>/.env`, como antes.
 `BQ_KEY_FILE` y `CACHE_DIR` relativos se resuelven contra el directorio del
 `.env` cargado (variable derivada `ENV_DIR`), no contra el `cwd`.
+
+Cualquier valor puede ser una referencia a Google Cloud, que se resuelve al
+arrancar con las ADC del host: `sm://` (Secret Manager) y `pm://` (Parameter
+Manager, renderizado). `--env-file` también acepta esas URIs para traer la
+configuración entera. Sin `BQ_KEY_FILE`, BigQuery autentica con las ADC.
+**Nunca loguees valores resueltos**: los errores citan la referencia, no el
+contenido.
 
 Variables principales:
 

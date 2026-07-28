@@ -2,6 +2,7 @@
 namespace MysqlToGoogleBigQuery\Tests\Config;
 
 use MysqlToGoogleBigQuery\Config\EnvironmentLoader;
+use MysqlToGoogleBigQuery\Config\RemoteConfigResolver;
 use PHPUnit\Framework\TestCase;
 
 class EnvironmentLoaderTest extends TestCase
@@ -72,9 +73,19 @@ class EnvironmentLoaderTest extends TestCase
         return $path;
     }
 
-    private function loader(): EnvironmentLoader
+    private function loader(?RemoteConfigResolver $resolver = null): EnvironmentLoader
     {
-        return new EnvironmentLoader($this->projectRoot);
+        // Without an explicit resolver the loader builds the real Google Cloud
+        // readers; they are lazy, so no reference means no API call
+        return new EnvironmentLoader($this->projectRoot, $resolver);
+    }
+
+    private function resolverWith(array $values): RemoteConfigResolver
+    {
+        return new RemoteConfigResolver(
+            new FakeConfigReader('sm', $values),
+            new FakeConfigReader('pm', $values)
+        );
     }
 
     public function testEnvNameLoadsTheEnvironmentFromTheDefaultConfigDir(): void
@@ -242,6 +253,71 @@ class EnvironmentLoaderTest extends TestCase
             'parent' => ['..'],
             'blank' => ['  '],
         ];
+    }
+
+    public function testConfigurationCanComeFromASecret(): void
+    {
+        $resolver = $this->resolverWith([
+            'sm://client-a-env' => "BQ_DATASET=from_secret\nDB_USERNAME=reporting\n",
+        ]);
+
+        $loaded = $this->loader($resolver)->load(envFile: 'sm://client-a-env');
+
+        // Nothing touched this filesystem: the URI itself is the source
+        $this->assertSame('sm://client-a-env', $loaded);
+        $this->assertSame('from_secret', $_ENV['BQ_DATASET']);
+        $this->assertSame('reporting', $_ENV['DB_USERNAME']);
+    }
+
+    public function testConfigurationCanComeFromARenderedParameter(): void
+    {
+        $resolver = $this->resolverWith([
+            'pm://client-a' => "BQ_DATASET=from_parameter\nDB_PASSWORD=hydrated-by-render\n",
+        ]);
+
+        $this->loader($resolver)->load(envFile: 'pm://client-a');
+
+        $this->assertSame('from_parameter', $_ENV['BQ_DATASET']);
+        // Parameter Manager resolves its __REF__ to Secret Manager on render
+        $this->assertSame('hydrated-by-render', $_ENV['DB_PASSWORD']);
+    }
+
+    public function testSecretReferencesInsideTheEnvFileAreResolved(): void
+    {
+        $this->writeEnvFile($this->projectRoot . '/envs/client-a/.env', [
+            'DB_USERNAME' => 'reporting',
+            'DB_PASSWORD' => 'sm://db-pass',
+        ]);
+
+        $this->loader($this->resolverWith(['sm://db-pass' => 's3cret']))->load(env: 'client-a');
+
+        $this->assertSame('s3cret', $_ENV['DB_PASSWORD']);
+        $this->assertSame('reporting', $_ENV['DB_USERNAME']);
+    }
+
+    public function testSecretReferencesAreResolvedWithoutAnyEnvFile(): void
+    {
+        $empty = $this->tmpDir . '/empty';
+        mkdir($empty, 0777, true);
+        chdir($empty);
+
+        // The reference can come from the real environment of the process
+        $_ENV['DB_PASSWORD'] = 'sm://db-pass';
+
+        $this->loader($this->resolverWith(['sm://db-pass' => 's3cret']))->load();
+
+        $this->assertSame('s3cret', $_ENV['DB_PASSWORD']);
+    }
+
+    public function testEnvironmentVariablesStillWinOverARemoteConfiguration(): void
+    {
+        $_ENV['BQ_DATASET'] = 'from_environment';
+
+        $resolver = $this->resolverWith(['sm://client-a-env' => "BQ_DATASET=from_secret\n"]);
+        $this->loader($resolver)->load(envFile: 'sm://client-a-env');
+
+        // Same immutability as a .env file
+        $this->assertSame('from_environment', $_ENV['BQ_DATASET']);
     }
 
     public function testResolvePathUsesTheEnvDirectoryForRelativePaths(): void

@@ -3,6 +3,7 @@
 namespace MysqlToGoogleBigQuery\Config;
 
 use Dotenv\Dotenv;
+use Dotenv\Repository\RepositoryBuilder;
 
 /**
  * Resolves and loads the .env of the environment to run against.
@@ -28,25 +29,51 @@ class EnvironmentLoader
     public const DEFAULT_CONFIG_DIR = 'envs';
 
     /**
-     * @param string $projectRoot Root of the project, used to resolve the
-     *                            default config directory
+     * @param string                    $projectRoot Root of the project, used to resolve
+     *                                               the default config directory
+     * @param RemoteConfigResolver|null $resolver    Reader of sm:// and pm:// references
+     *                                               (injected by tests)
      */
-    public function __construct(private string $projectRoot)
+    public function __construct(private string $projectRoot, private ?RemoteConfigResolver $resolver = null)
     {
     }
 
+    private function resolver(): RemoteConfigResolver
+    {
+        return $this->resolver ??= RemoteConfigResolver::withDefaultReaders();
+    }
+
     /**
-     * Load the .env of the selected environment.
+     * Load the configuration of the selected environment.
      *
-     * Precedence: $envFile (explicit path) > $env (<config dir>/<env>/.env) >
-     * <cwd>/.env (the historical behaviour, kept for backwards compatibility).
+     * Precedence: $envFile (explicit path or URI) > $env (<config dir>/<env>/.env)
+     * > <cwd>/.env (the historical behaviour, kept for backwards compatibility).
+     *
+     * Whatever the source, any sm:// reference among the resulting variables is
+     * replaced by its value afterwards.
      *
      * @param  string|null $env        Environment name (directory under the config dir)
-     * @param  string|null $envFile    Path to a specific .env file
+     * @param  string|null $envFile    Path or URI (sm://, pm://) of a specific configuration
      * @param  string|null $configDir  Directory holding the environments
-     * @return string|null             Path of the loaded .env, null if there was none
+     * @return string|null             Path/URI of the loaded configuration, null if there was none
      */
     public function load(?string $env = null, ?string $envFile = null, ?string $configDir = null): ?string
+    {
+        $source = $this->loadSource($env, $envFile, $configDir);
+
+        // Runs even without a .env: the references can come from the real
+        // environment of the process too
+        $this->resolver()->resolveEnvironmentVariables();
+
+        return $source;
+    }
+
+    /**
+     * Load the variables of the selected source, without resolving references
+     *
+     * @return string|null Path/URI of the loaded configuration, null if there was none
+     */
+    private function loadSource(?string $env, ?string $envFile, ?string $configDir): ?string
     {
         if ($env !== null && $envFile !== null) {
             throw new \InvalidArgumentException(
@@ -56,6 +83,14 @@ class EnvironmentLoader
         }
 
         if ($envFile !== null) {
+            // A URI (sm://, pm://) instead of a path: the whole configuration
+            // comes from Google Cloud, so nothing has to sit on this disk
+            if ($this->resolver()->isReference($envFile)) {
+                $this->loadContents($this->resolver()->read($envFile));
+
+                return $envFile;
+            }
+
             $path = $this->toAbsolutePath($envFile);
 
             if (!is_file($path)) {
@@ -146,6 +181,24 @@ class EnvironmentLoader
         // Windows drive letters and UNC paths are covered on purpose: the CLI
         // is not Unix-only and a "C:\..." path must not get the cwd prepended
         return $path !== '' && ($path[0] === '/' || $path[0] === '\\' || preg_match('#^[A-Za-z]:[\\\\/]#', $path) === 1);
+    }
+
+    /**
+     * Load .env contents that never touched this filesystem (a secret payload,
+     * a rendered parameter), with the same immutability as a file: whatever is
+     * already defined in the environment wins.
+     *
+     * @param string $contents .env formatted contents
+     */
+    private function loadContents(string $contents): void
+    {
+        $repository = RepositoryBuilder::createWithDefaultAdapters()->immutable()->make();
+
+        foreach (Dotenv::parse($contents) as $name => $value) {
+            if ($value !== null) {
+                $repository->set($name, $value);
+            }
+        }
     }
 
     /**

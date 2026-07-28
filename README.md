@@ -140,6 +140,44 @@ Relative `BQ_KEY_FILE` and `CACHE_DIR` values are resolved **against the
 directory of the loaded `.env`**, not against the current directory, so each
 environment can keep its key next to its configuration.
 
+### Configuration from Google Cloud (Secret Manager / Parameter Manager)
+
+Nothing sensitive has to live on disk. Authentication uses the **Application
+Default Credentials** of the host (a GCE/GKE/Cloud Run service account), so the
+identity that opens the secrets is the machine's, not a file.
+
+**A single value from Secret Manager** — any variable whose value is a `sm://`
+reference is resolved at startup, whatever its source:
+
+```text
+DB_PASSWORD=sm://projects/my-project/secrets/db-pass/versions/latest
+DB_PASSWORD=sm://db-pass            # short form: BQ_PROJECT_ID, latest version
+DB_PASSWORD=sm://db-pass/versions/3 # pinned version
+```
+
+**The whole configuration from Google Cloud** — `--env-file` also takes a
+reference instead of a path:
+
+```bash
+# the payload of the secret, parsed as a .env
+bin/console sync log_entries -o id --env-file=sm://client-a-env
+
+# a parameter version, rendered: its __REF__(//secretmanager.googleapis.com/…)
+# come back already resolved, so the parameter holds the plain configuration
+# and Secret Manager holds the sensitive values
+bin/console sync log_entries -o id --env-file=pm://client-a
+```
+
+**No key file at all** — leave `BQ_KEY_FILE` unset and BigQuery authenticates
+with the same Application Default Credentials; or point it at a secret
+(`BQ_KEY_FILE=sm://bq-service-account`) and the key is used from memory,
+without ever being written to disk.
+
+Roles needed: `roles/secretmanager.secretAccessor` on the secrets and
+`roles/parametermanager.parameterAccessor` on the parameter. Values are read
+on every run and never cached on disk. Regional secrets and parameters are
+reached through their regional endpoint automatically.
+
 PS: To create the `Google Service Account JSON Key File`, access [https://console.cloud.google.com/apis/credentials/serviceaccountkey](https://console.cloud.google.com/apis/credentials/serviceaccountkey)
 
 Run:

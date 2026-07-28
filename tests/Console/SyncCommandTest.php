@@ -150,6 +150,21 @@ class SyncCommandTest extends TestCase
         ]);
     }
 
+    public function testMissingDatabaseNameFailsWithAReadableError(): void
+    {
+        unset($_ENV['DB_DATABASE_NAME']);
+
+        $service = $this->createMock(SyncService::class);
+        $service->expects($this->never())->method('execute');
+
+        $tester = $this->applicationTester($service);
+        $exitCode = $tester->run(['command' => 'sync', 'table-name' => 'users']);
+
+        $this->assertNotSame(0, $exitCode);
+        $this->assertStringContainsString('DB_DATABASE_NAME', $tester->getDisplay(true));
+        $this->assertStringNotContainsString('TypeError', $tester->getDisplay(true));
+    }
+
     public function testDatabaseNameFallsBackToEnv(): void
     {
         $_ENV['DB_DATABASE_NAME'] = 'env_db';
