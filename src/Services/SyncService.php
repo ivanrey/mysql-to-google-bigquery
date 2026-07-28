@@ -64,6 +64,12 @@ class SyncService
             );
         }
 
+        // Validate before the destructive --delete-table below: a table that
+        // can't be synced incrementally must not lose its BigQuery data first
+        if (!$unbuffered && $orderColumn) {
+            $this->assertCreatedAtIsUsable($databaseName, $tableName, $ignoreColumns);
+        }
+
         if ($deleteTable) {
             if ($unbuffered) {
                 // No physical delete: the load job runs with WRITE_TRUNCATE and
@@ -108,26 +114,6 @@ class SyncService
         if (!$unbuffered && $orderColumn) {
             $output->writeln('<fg=green>Using order column "' . $orderColumn . '"</>');
 
-            // The incremental path filters BigQuery queries by created_at
-            // (see BigQuery::getMaxColumnValue/deleteColumnValue). Fail early
-            // with a clear error instead of an opaque BigQuery one mid-sync.
-            if (in_array('created_at', $ignoreColumns)) {
-                throw new \Exception(
-                    'The column \'created_at\' is being excluded with --ignore-column, but the ' .
-                    'incremental sync (--order-column) requires it in the BigQuery table for its ' .
-                    'time filter. Remove it from the ignored columns or use --un-buffer with --delete-table.'
-                );
-            }
-
-            $mysqlColumns = $this->mysql->getTableColumns($databaseName, $tableName);
-            if (!array_key_exists('created_at', $mysqlColumns)) {
-                throw new \Exception(
-                    'Table \'' . $tableName . '\' has no \'created_at\' column, required by the ' .
-                    'incremental sync time filter (--order-column). Add the column or use ' .
-                    '--un-buffer with --delete-table for a full dump.'
-                );
-            }
-
             $mysqlMaxColumnValue = $this->mysql->getMaxColumnValue($databaseName, $tableName, $orderColumn);
             $bigQueryMaxColumnValue = $this->bigQuery->getMaxColumnValue($bigQueryTableName, $orderColumn);
 
@@ -153,8 +139,26 @@ class SyncService
                  * Now get the latest "real" value
                  */
                 $bigQueryMaxColumnValue = $this->bigQuery->getMaxColumnValue($bigQueryTableName, $orderColumn);
+
+                if (!$bigQueryMaxColumnValue) {
+                    // The dedup DELETE emptied the window (it held a single
+                    // order value): same risk as below, resuming from scratch
+                    // is only safe if the whole table is empty
+                    $this->assertBigQueryTableIsEmpty($bigQueryTableName);
+
+                    $bigQueryMaxColumnValue = false;
+                }
+
                 $output->writeln('<fg=green>Syncing from "' . $bigQueryMaxColumnValue . '"</>');
             } else {
+                // The filtered MAX is NULL: either the BigQuery table really is
+                // empty, or its rows all fall outside the created_at lookback
+                // window (a quiet table, or a cron down longer than the window).
+                // Telling both apart matters: treating a populated table as
+                // empty skips the dedup DELETE and re-inserts the whole MySQL
+                // table on top of the existing rows, duplicating everything.
+                $this->assertBigQueryTableIsEmpty($bigQueryTableName);
+
                 $bigQueryMaxColumnValue = false;
             }
         } else {
@@ -217,6 +221,59 @@ class SyncService
             }
             $output->writeln('<fg=green>Synced!</>');
             $progress->finish();
+        }
+    }
+
+    /**
+     * The incremental path filters its BigQuery queries by created_at (see
+     * BigQuery::getMaxColumnValue/deleteColumnValue). Fail early with a clear
+     * error instead of an opaque BigQuery one mid-sync.
+     *
+     * @param  string $databaseName          Database name
+     * @param  string $tableName             Table name
+     * @param  array  $ignoreColumns         Ignore columns from syncing
+     */
+    protected function assertCreatedAtIsUsable(string $databaseName, string $tableName, array $ignoreColumns)
+    {
+        if (in_array('created_at', $ignoreColumns)) {
+            throw new \Exception(
+                'The column \'created_at\' is being excluded with --ignore-column, but the ' .
+                'incremental sync (--order-column) requires it in the BigQuery table for its ' .
+                'time filter. Remove it from the ignored columns or use --un-buffer with --delete-table.'
+            );
+        }
+
+        $mysqlColumns = $this->mysql->getTableColumns($databaseName, $tableName);
+        if (!array_key_exists('created_at', $mysqlColumns)) {
+            throw new \Exception(
+                'Table \'' . $tableName . '\' has no \'created_at\' column, required by the ' .
+                'incremental sync time filter (--order-column). Add the column or use ' .
+                '--un-buffer with --delete-table for a full dump.'
+            );
+        }
+    }
+
+    /**
+     * Guard for the "no rows inside the lookback window" case: syncing from
+     * scratch is only safe if the BigQuery table is really empty.
+     *
+     * @param  string $bigQueryTableName     BigQuery Table name
+     */
+    protected function assertBigQueryTableIsEmpty(string $bigQueryTableName)
+    {
+        // false (table missing from the dataset metadata) counts as empty
+        $bigQueryCountTableRows = $this->bigQuery->getCountTableRows($bigQueryTableName);
+
+        if ($bigQueryCountTableRows > 0) {
+            throw new \Exception(
+                'The BigQuery table \'' . $bigQueryTableName . '\' has ' . $bigQueryCountTableRows .
+                ' rows, but none of them are inside the created_at lookback window (' .
+                $this->bigQuery->getCreatedAtLookback($bigQueryTableName) . '), so the incremental ' .
+                'sync cannot tell where to resume. Continuing would re-insert the whole MySQL table ' .
+                'on top of the existing rows and duplicate them. Widen the window with ' .
+                'CREATED_AT_LOOKBACK_<TABLE> / CREATED_AT_LOOKBACK so it reaches the newest rows, ' .
+                'or reload the table with --un-buffer --delete-table.'
+            );
         }
     }
 
