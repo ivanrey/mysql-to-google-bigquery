@@ -97,6 +97,14 @@ CREATED_AT_LOOKBACK=-8 days
 CREATED_AT_LOOKBACK_USER_LOGS=-30 days
 ```
 
+Keep the window wide enough to always reach the newest rows of the table. If
+the BigQuery table has rows but **none** of them fall inside the window (a
+table with no recent activity, or a cron stopped for longer than the window),
+the sync cannot tell where to resume, so it **aborts** instead of assuming the
+table is empty — which would re-insert the whole MySQL table on top of the
+existing rows and duplicate them. Widen `CREATED_AT_LOOKBACK[_<TABLE>]`, or
+reload the table with `--un-buffer --delete-table`.
+
 PS: To create the `Google Service Account JSON Key File`, access [https://console.cloud.google.com/apis/credentials/serviceaccountkey](https://console.cloud.google.com/apis/credentials/serviceaccountkey)
 
 Run:
