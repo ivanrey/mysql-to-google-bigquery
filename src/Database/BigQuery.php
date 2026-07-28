@@ -4,6 +4,7 @@ namespace MysqlToGoogleBigQuery\Database;
 
 use Doctrine\DBAL\Types\Types;
 use Google\Cloud\BigQuery\BigQueryClient;
+use MysqlToGoogleBigQuery\Config\EnvironmentLoader;
 
 class BigQuery
 {
@@ -239,16 +240,7 @@ class BigQuery
             return $this->client;
         }
 
-        $keyFilePath = $_ENV['BQ_KEY_FILE'];
-
-        // Support relative and absolute path
-        if ($keyFilePath[0] !== '/') {
-            $keyFilePath = getcwd() . '/' . $keyFilePath;
-        }
-
-        if (!file_exists($keyFilePath)) {
-            throw new \Exception('Google Service Account JSON Key File not found', 1);
-        }
+        $keyFilePath = $this->getKeyFilePath();
 
         return $this->client = new BigQueryClient([
             'projectId' => $_ENV['BQ_PROJECT_ID'],
@@ -256,6 +248,25 @@ class BigQuery
             'scopes' => [BigQueryClient::SCOPE],
             'location' => $_ENV['BQ_LOCATION'] ?? 'US',
         ]);
+    }
+
+    /**
+     * Absolute path of the Google Service Account JSON Key File
+     *
+     * A relative BQ_KEY_FILE is resolved against the directory of the loaded
+     * .env, so a configuration keeps working from any working directory
+     *
+     * @return string Absolute path of an existing key file
+     */
+    public function getKeyFilePath(): string
+    {
+        $keyFilePath = EnvironmentLoader::resolvePath($_ENV['BQ_KEY_FILE']);
+
+        if (!file_exists($keyFilePath)) {
+            throw new \Exception('Google Service Account JSON Key File not found: ' . $keyFilePath, 1);
+        }
+
+        return $keyFilePath;
     }
 
     /**
