@@ -1,69 +1,8 @@
 <?php
 namespace MysqlToGoogleBigQuery\Tests\Services;
 
-use Doctrine\DBAL\Schema\Column;
-use MysqlToGoogleBigQuery\Database\BigQuery;
-use MysqlToGoogleBigQuery\Database\Mysql;
-use MysqlToGoogleBigQuery\Services\SyncService;
-use PHPUnit\Framework\MockObject\MockObject;
-use PHPUnit\Framework\TestCase;
-use Symfony\Component\Console\Output\BufferedOutput;
-
-class ExecuteIncrementalTest extends TestCase
+class ExecuteIncrementalTest extends SyncServiceTestCase
 {
-    private BigQuery&MockObject $bigQuery;
-    private Mysql&MockObject $mysql;
-    private BufferedOutput $output;
-
-    protected function setUp(): void
-    {
-        $this->bigQuery = $this->createMock(BigQuery::class);
-        $this->mysql = $this->createMock(Mysql::class);
-        $this->output = new BufferedOutput();
-    }
-
-    private function service(): SyncService&MockObject
-    {
-        return $this->getMockBuilder(SyncService::class)
-            ->setConstructorArgs([$this->bigQuery, $this->mysql])
-            ->onlyMethods(['sendBatch', 'sendBatchUnbuffered', 'createTable'])
-            ->getMock();
-    }
-
-    /**
-     * Schema mock: array of Column doubles keyed by (lowercase) column name.
-     */
-    private function schemaWithColumns(string ...$names): array
-    {
-        $columns = [];
-        foreach ($names as $name) {
-            $columns[$name] = $this->createMock(Column::class);
-        }
-
-        return $columns;
-    }
-
-    private function execute(
-        SyncService $service,
-        ?string $orderColumn = 'id',
-        array $ignoreColumns = [],
-        bool $deleteTable = false,
-        bool $unbuffered = false
-    ): void {
-        $service->execute(
-            'mydb',
-            'users',
-            'users',
-            false,
-            $deleteTable,
-            $orderColumn,
-            $ignoreColumns,
-            $this->output,
-            false,
-            $unbuffered
-        );
-    }
-
     public function testIncrementalFailsEarlyWhenCreatedAtColumnIsMissing(): void
     {
         $service = $this->service();
@@ -78,7 +17,7 @@ class ExecuteIncrementalTest extends TestCase
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage("has no 'created_at' column");
 
-        $this->execute($service);
+        $this->execute($service, orderColumn: 'id');
     }
 
     public function testIncrementalFailsEarlyWhenCreatedAtIsIgnored(): void
@@ -94,7 +33,7 @@ class ExecuteIncrementalTest extends TestCase
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage('--ignore-column');
 
-        $this->execute($service, ignoreColumns: ['created_at']);
+        $this->execute($service, orderColumn: 'id', ignoreColumns: ['created_at']);
     }
 
     public function testIncrementalProceedsWhenCreatedAtExists(): void
@@ -109,7 +48,7 @@ class ExecuteIncrementalTest extends TestCase
         $this->mysql->method('getMaxColumnValue')->willReturn('100');
         $this->bigQuery->expects($this->once())->method('getMaxColumnValue')->willReturn('100');
 
-        $this->execute($service);
+        $this->execute($service, orderColumn: 'id');
 
         $this->assertStringContainsString('Already synced', $this->output->fetch());
     }
@@ -130,7 +69,7 @@ class ExecuteIncrementalTest extends TestCase
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage("has no 'created_at' column");
 
-        $this->execute($service, deleteTable: true);
+        $this->execute($service, orderColumn: 'id', deleteTable: true);
     }
 
     public function testIncrementalAbortsWhenTheLookbackWindowIsEmptyButTheTableHasRows(): void
@@ -153,7 +92,7 @@ class ExecuteIncrementalTest extends TestCase
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage('duplicate');
 
-        $this->execute($service);
+        $this->execute($service, orderColumn: 'id');
     }
 
     public function testIncrementalSyncsFromScratchWhenTheTableIsReallyEmpty(): void
@@ -172,7 +111,7 @@ class ExecuteIncrementalTest extends TestCase
         // Empty destination: the full dump is the correct behaviour here
         $service->expects($this->once())->method('sendBatch');
 
-        $this->execute($service);
+        $this->execute($service, orderColumn: 'id');
 
         $this->assertStringContainsString('Syncing 10 rows', $this->output->fetch());
     }
@@ -199,7 +138,7 @@ class ExecuteIncrementalTest extends TestCase
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage('duplicate');
 
-        $this->execute($service);
+        $this->execute($service, orderColumn: 'id');
     }
 
     public function testUnbufferedDoesNotRequireCreatedAt(): void
@@ -211,7 +150,7 @@ class ExecuteIncrementalTest extends TestCase
         $service->expects($this->once())->method('sendBatchUnbuffered');
 
         // Table without created_at, but full dump doesn't use the time filter
-        $this->execute($service, orderColumn: null, deleteTable: true, unbuffered: true);
+        $this->execute($service, deleteTable: true, unbuffered: true);
     }
 
     public function testNonIncrementalDoesNotRequireCreatedAt(): void
@@ -225,7 +164,7 @@ class ExecuteIncrementalTest extends TestCase
         // No order column -> count-based path, created_at never checked
         $this->mysql->expects($this->never())->method('getTableColumns');
 
-        $this->execute($service, orderColumn: null);
+        $this->execute($service);
 
         $this->assertStringContainsString('Already synced', $this->output->fetch());
     }

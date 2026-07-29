@@ -1,59 +1,8 @@
 <?php
 namespace MysqlToGoogleBigQuery\Tests\Services;
 
-use MysqlToGoogleBigQuery\Database\BigQuery;
-use MysqlToGoogleBigQuery\Database\Mysql;
-use MysqlToGoogleBigQuery\Services\SyncService;
-use PHPUnit\Framework\MockObject\MockObject;
-use PHPUnit\Framework\TestCase;
-use Symfony\Component\Console\Output\BufferedOutput;
-
-class ExecuteUnbufferedTest extends TestCase
+class ExecuteUnbufferedTest extends SyncServiceTestCase
 {
-    private BigQuery&MockObject $bigQuery;
-    private Mysql&MockObject $mysql;
-    private BufferedOutput $output;
-
-    protected function setUp(): void
-    {
-        $this->bigQuery = $this->createMock(BigQuery::class);
-        $this->mysql = $this->createMock(Mysql::class);
-        $this->output = new BufferedOutput();
-    }
-
-    /**
-     * Partial mock: the real execute() runs, but the batch senders and the
-     * table creation (which hit MySQL/BigQuery) are stubbed out.
-     */
-    private function service(): SyncService&MockObject
-    {
-        return $this->getMockBuilder(SyncService::class)
-            ->setConstructorArgs([$this->bigQuery, $this->mysql])
-            ->onlyMethods(['sendBatch', 'sendBatchUnbuffered', 'createTable'])
-            ->getMock();
-    }
-
-    private function execute(
-        SyncService $service,
-        bool $createTable = false,
-        bool $deleteTable = false,
-        bool $noData = false,
-        bool $unbuffered = false
-    ): void {
-        $service->execute(
-            'mydb',
-            'users',
-            'users',
-            $createTable,
-            $deleteTable,
-            null,
-            [],
-            $this->output,
-            $noData,
-            $unbuffered
-        );
-    }
-
     public function testUnbufferedWithoutDeleteTableFailsWithClearError(): void
     {
         $service = $this->service();
