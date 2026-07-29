@@ -240,14 +240,66 @@ class BigQuery
             return $this->client;
         }
 
-        $keyFilePath = $this->getKeyFilePath();
-
-        return $this->client = new BigQueryClient([
-            'projectId' => $_ENV['BQ_PROJECT_ID'],
-            'keyFile' => json_decode(file_get_contents($keyFilePath), true),
+        $config = [
             'scopes' => [BigQueryClient::SCOPE],
             'location' => $_ENV['BQ_LOCATION'] ?? 'US',
-        ]);
+        ];
+
+        // Both are optional: without them the client falls back to the
+        // Application Default Credentials of the host and their project
+        if (isset($_ENV['BQ_PROJECT_ID']) && trim($_ENV['BQ_PROJECT_ID']) !== '') {
+            $config['projectId'] = trim($_ENV['BQ_PROJECT_ID']);
+        }
+
+        $keyFile = $this->getKeyFile();
+
+        if ($keyFile !== null) {
+            $config['keyFile'] = $keyFile;
+        }
+
+        return $this->client = new BigQueryClient($config);
+    }
+
+    /**
+     * Decoded Google Service Account key, or null to authenticate with the
+     * Application Default Credentials of the host.
+     *
+     * BQ_KEY_FILE may hold a path, or the key itself when it comes from a
+     * secret (BQ_KEY_FILE=sm://…, already resolved by the EnvironmentLoader):
+     * in that case the key is never written to disk.
+     *
+     * @return array|null Decoded key file, null when there is none
+     */
+    public function getKeyFile(): ?array
+    {
+        $keyFile = $_ENV['BQ_KEY_FILE'] ?? '';
+
+        if (!is_string($keyFile) || trim($keyFile) === '') {
+            return null;
+        }
+
+        if (str_starts_with(ltrim($keyFile), '{')) {
+            $contents = $keyFile;
+            $source = 'the BQ_KEY_FILE secret';
+        } else {
+            $source = $this->getKeyFilePath();
+            $contents = @file_get_contents($source);
+
+            if ($contents === false) {
+                // Exists (getKeyFilePath checked) but could not be read:
+                // usually permissions, which "invalid JSON" would hide
+                throw new \Exception('Could not read the Google Service Account key file ' . $source, 1);
+            }
+        }
+
+        $decoded = json_decode($contents, true);
+
+        if (!is_array($decoded)) {
+            // Never echo the contents back: it is a credential
+            throw new \Exception('The Google Service Account key from ' . $source . ' is not valid JSON', 1);
+        }
+
+        return $decoded;
     }
 
     /**

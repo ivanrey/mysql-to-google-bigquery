@@ -74,7 +74,16 @@ class SyncCommand extends Command
         $databaseName = $input->getOption('database-name');
 
         if (empty($databaseName)) {
-            $databaseName = $_ENV['DB_DATABASE_NAME'];
+            $databaseName = $_ENV['DB_DATABASE_NAME'] ?? null;
+        }
+
+        if (empty($databaseName)) {
+            // Without this the missing value reached SyncService as null and
+            // surfaced as a TypeError with a stack trace
+            throw new \InvalidArgumentException(
+                'No MySQL database selected: pass --database-name or set DB_DATABASE_NAME ' .
+                'in the configuration of the environment.'
+            );
         }
 
         $bigQueryTableName = $input->getOption('bigquery-table-name');

@@ -30,7 +30,7 @@ $definition->addOption(new InputOption(
     'env-file',
     null,
     InputOption::VALUE_REQUIRED,
-    'Path to a specific .env file (alternative to --env)'
+    'Path to a specific .env file, or a sm:// (Secret Manager) / pm:// (Parameter Manager) reference'
 ));
 $definition->addOption(new InputOption(
     'config-dir',
@@ -49,7 +49,7 @@ try {
         $input->getParameterOption('--env-file', null),
         $input->getParameterOption('--config-dir', null)
     );
-} catch (\InvalidArgumentException $e) {
+} catch (\InvalidArgumentException | \RuntimeException $e) {
     // Reported here (single readable line, non-zero exit) because the failure
     // happens before Symfony Console takes over the error rendering
     fwrite(STDERR, $e->getMessage() . PHP_EOL);

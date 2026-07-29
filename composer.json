@@ -17,7 +17,9 @@
         "php-di/php-di": "^6.4",
         "google/cloud-bigquery": "^1.38",
         "doctrine/dbal": "^3.8",
-        "facile-it/doctrine-mysql-come-back": "^2.1"
+        "facile-it/doctrine-mysql-come-back": "^2.1",
+        "google/cloud-secret-manager": "^2.4",
+        "google/cloud-parametermanager": "^0.5.4"
     },
     "require-dev": {
         "phpunit/phpunit": "^10.5"

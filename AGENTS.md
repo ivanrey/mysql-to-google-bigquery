@@ -27,6 +27,7 @@ negocio ni a clientes concretos:
 ```
 bin/console                       Punto de entrada CLI (Symfony Console)
 src/Config/EnvironmentLoader      Selección y carga del .env del entorno (--env)
+src/Config/RemoteConfigResolver   Resuelve referencias sm:// y pm:// (Google Cloud)
 src/Console/Commands/SyncCommand  Comando `sync`
 src/Services/SyncService          Lógica de sincronización (batches, unbuffered, waitJob)
 src/Database/Mysql                Conexión MySQL (Doctrine DBAL) y tipos custom
@@ -42,6 +43,13 @@ Vía `.env` (cargado con `vlucas/phpdotenv`). Se elige con `--env=<nombre>`
 `BQ_KEY_FILE` y `CACHE_DIR` relativos se resuelven contra el directorio del
 `.env` cargado (variable derivada `ENV_DIR`), no contra el `cwd`.
 
+Cualquier valor puede ser una referencia a Google Cloud, que se resuelve al
+arrancar con las ADC del host: `sm://` (Secret Manager) y `pm://` (Parameter
+Manager, renderizado). `--env-file` también acepta esas URIs para traer la
+configuración entera. Sin `BQ_KEY_FILE`, BigQuery autentica con las ADC.
+**Nunca loguees valores resueltos**: los errores citan la referencia, no el
+contenido.
+
 Variables principales:
 
 ```
@@ -49,7 +57,8 @@ BQ_PROJECT_ID       ID del proyecto en GCP
 BQ_KEY_FILE         Ruta al JSON de service account
 BQ_DATASET          Dataset destino en BigQuery
 BQ_LOCATION         Región del dataset (ej. US, southamerica-east1)
-DB_DATABASE_NAME, DB_USERNAME, DB_PASSWORD, DB_HOST, DB_PORT
+DB_DATABASE_NAME, DB_USERNAME, DB_PASSWORD, DB_HOST (no hay DB_PORT: Mysql.php
+                    no lo lee, el puerto es el default del driver)
 IGNORE_COLUMNS      Columnas a omitir (separadas por coma)
 CREATED_AT_LOOKBACK Ventana para filtros created_at (ej. "-8 days")
 MAX_ROWS_PER_BATCH  Filas por batch (default 600000)
