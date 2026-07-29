@@ -57,7 +57,8 @@ BQ_PROJECT_ID       ID del proyecto en GCP
 BQ_KEY_FILE         Ruta al JSON de service account
 BQ_DATASET          Dataset destino en BigQuery
 BQ_LOCATION         Región del dataset (ej. US, southamerica-east1)
-DB_DATABASE_NAME, DB_USERNAME, DB_PASSWORD, DB_HOST, DB_PORT
+DB_DATABASE_NAME, DB_USERNAME, DB_PASSWORD, DB_HOST (no hay DB_PORT: Mysql.php
+                    no lo lee, el puerto es el default del driver)
 IGNORE_COLUMNS      Columnas a omitir (separadas por coma)
 CREATED_AT_LOOKBACK Ventana para filtros created_at (ej. "-8 days")
 MAX_ROWS_PER_BATCH  Filas por batch (default 600000)
