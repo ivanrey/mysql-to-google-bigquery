@@ -2,6 +2,7 @@
 namespace MysqlToGoogleBigQuery\Services;
 
 use Doctrine\DBAL\Types\Types;
+use MysqlToGoogleBigQuery\Config\EnvironmentLoader;
 use MysqlToGoogleBigQuery\Database\BigQuery;
 use MysqlToGoogleBigQuery\Database\Mysql;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -278,6 +279,24 @@ class SyncService
     }
 
     /**
+     * Path of the temporary newline-delimited JSON file of a table
+     *
+     * A relative CACHE_DIR is resolved against the directory of the loaded
+     * .env, so it doesn't depend on the working directory either
+     *
+     * @param  string $tableName             Table name
+     * @return string                        Path of the temp JSON file
+     */
+    protected function getJsonFilePath(string $tableName): string
+    {
+        $cacheDir = (isset($_ENV['CACHE_DIR']) && trim($_ENV['CACHE_DIR']) !== '')
+            ? EnvironmentLoader::resolvePath(trim($_ENV['CACHE_DIR']))
+            : __DIR__ . '/../../cache';
+
+        return rtrim($cacheDir, '/') . '/' . $tableName;
+    }
+
+    /**
      * Send a batch of data
      * @param  string $databaseName          Database name
      * @param  string $tableName             Table name
@@ -302,7 +321,7 @@ class SyncService
         $mysqlPlatform = $mysqlConnection->getDatabasePlatform();
         $mysqlTableColumns = $this->mysql->getTableColumns($databaseName, $tableName);
 
-        $jsonFilePath = ((isset($_ENV['CACHE_DIR'])) ? $_ENV['CACHE_DIR'] : __DIR__ . '/../../cache/') . $tableName;
+        $jsonFilePath = $this->getJsonFilePath($tableName);
 
         if (file_exists($jsonFilePath)) {
             unlink($jsonFilePath);
@@ -419,7 +438,7 @@ class SyncService
         $mysqlPlatform = $mysqlConnection->getDatabasePlatform();
         $mysqlTableColumns = $this->mysql->getTableColumns($databaseName, $tableName);
 
-        $jsonFilePath = ((isset($_ENV['CACHE_DIR'])) ? $_ENV['CACHE_DIR'] : __DIR__ . '/../../cache/') . $tableName;
+        $jsonFilePath = $this->getJsonFilePath($tableName);
 
         if (file_exists($jsonFilePath)) {
             unlink($jsonFilePath);

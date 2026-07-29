@@ -8,20 +8,57 @@ foreach (['../../../autoload.php', '../../autoload.php', '../vendor/autoload.php
     }
 }
 
-use Symfony\Component\Console\Application;
+use MysqlToGoogleBigQuery\Config\EnvironmentLoader;
 use MysqlToGoogleBigQuery\Console\Commands\SyncCommand;
-
-// Load the .env definitions
-if (file_exists(getcwd(). '/.env')) {
-    $dotenv = Dotenv\Dotenv::createImmutable(getcwd());
-    $dotenv->load();
-}
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Input\ArgvInput;
+use Symfony\Component\Console\Input\InputOption;
 
 $application = new Application();
+
+// Global options: they select the configuration, so they are read before the
+// command runs (the .env has to be loaded by then) and declared here as well
+// so Symfony accepts them and lists them in --help
+$definition = $application->getDefinition();
+$definition->addOption(new InputOption(
+    'env',
+    'e',
+    InputOption::VALUE_REQUIRED,
+    'Environment to run against: loads <config dir>/<env>/.env'
+));
+$definition->addOption(new InputOption(
+    'env-file',
+    null,
+    InputOption::VALUE_REQUIRED,
+    'Path to a specific .env file (alternative to --env)'
+));
+$definition->addOption(new InputOption(
+    'config-dir',
+    null,
+    InputOption::VALUE_REQUIRED,
+    'Directory holding one subdirectory per environment (default: <project>/envs, or CONFIG_DIR)'
+));
+
+$input = new ArgvInput();
+
+// Load the .env definitions of the selected environment; without --env or
+// --env-file it falls back to <cwd>/.env, as it always did
+try {
+    (new EnvironmentLoader(dirname(__DIR__)))->load(
+        $input->getParameterOption(['--env', '-e'], null),
+        $input->getParameterOption('--env-file', null),
+        $input->getParameterOption('--config-dir', null)
+    );
+} catch (\InvalidArgumentException $e) {
+    // Reported here (single readable line, non-zero exit) because the failure
+    // happens before Symfony Console takes over the error rendering
+    fwrite(STDERR, $e->getMessage() . PHP_EOL);
+    exit(1);
+}
 
 // Lista de comandos
 $application->add(new SyncCommand());
 
 // Symfony Console ya formatea las excepciones (una sola traza, legible con -v)
 // y devuelve un código de salida distinto de 0 en caso de error
-$application->run();
+$application->run($input);

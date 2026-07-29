@@ -105,6 +105,41 @@ table is empty — which would re-insert the whole MySQL table on top of the
 existing rows and duplicate them. Widen `CREATED_AT_LOOKBACK[_<TABLE>]`, or
 reload the table with `--un-buffer --delete-table`.
 
+### Several configurations (environments)
+
+The same installation can serve several configurations — one per client,
+database or stage. Put each one in its own directory, with its `.env` and its
+service account key, under a config directory (`envs/` next to the project by
+default):
+
+```text
+envs/
+├── client-a/
+│   ├── .env
+│   └── service-account-key.json
+└── client-b/
+    ├── .env
+    └── service-account-key.json
+```
+
+and select it by name, from any working directory:
+
+```bash
+bin/console sync log_entries -o id --env=client-a
+```
+
+- `--env=<name>` loads `<config dir>/<name>/.env`.
+- `--env-file=/path/to/.env` loads a specific file instead (mutually exclusive
+  with `--env`).
+- `--config-dir=/path/to/configs` (or the `CONFIG_DIR` environment variable)
+  points at the directory holding the environments. Relative values are
+  resolved against the current directory.
+- Without either flag, `<cwd>/.env` is loaded, as it always was.
+
+Relative `BQ_KEY_FILE` and `CACHE_DIR` values are resolved **against the
+directory of the loaded `.env`**, not against the current directory, so each
+environment can keep its key next to its configuration.
+
 PS: To create the `Google Service Account JSON Key File`, access [https://console.cloud.google.com/apis/credentials/serviceaccountkey](https://console.cloud.google.com/apis/credentials/serviceaccountkey)
 
 Run:

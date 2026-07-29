@@ -8,6 +8,7 @@ use Google\Cloud\BigQuery\LoadJobConfiguration;
 use Google\Cloud\BigQuery\QueryJobConfiguration;
 use Google\Cloud\BigQuery\QueryResults;
 use Google\Cloud\BigQuery\Table;
+use MysqlToGoogleBigQuery\Config\EnvironmentLoader;
 use MysqlToGoogleBigQuery\Database\BigQuery;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
@@ -16,6 +17,7 @@ class BigQueryTest extends TestCase
 {
     private BigQueryClient&MockObject $client;
     private BigQuery $bigQuery;
+    private string $keyFileDir;
 
     protected function setUp(): void
     {
@@ -29,10 +31,30 @@ class BigQueryTest extends TestCase
     {
         unset(
             $_ENV['BQ_DATASET'],
+            $_ENV['BQ_KEY_FILE'],
+            $_ENV[EnvironmentLoader::ENV_DIR],
             $_ENV['CREATED_AT_LOOKBACK'],
             $_ENV['CREATED_AT_LOOKBACK_USERS'],
             $_ENV['CREATED_AT_LOOKBACK_USER_LOGS']
         );
+
+        if (isset($this->keyFileDir)) {
+            unlink($this->keyFileDir . '/service-account-key.json');
+            rmdir($this->keyFileDir);
+            unset($this->keyFileDir);
+        }
+    }
+
+    /**
+     * Create a throwaway key file and return the directory holding it
+     */
+    private function createKeyFile(): string
+    {
+        $this->keyFileDir = sys_get_temp_dir() . '/bq-key-' . uniqid();
+        mkdir($this->keyFileDir, 0777, true);
+        file_put_contents($this->keyFileDir . '/service-account-key.json', '{}');
+
+        return $this->keyFileDir;
     }
 
     /**
@@ -337,5 +359,35 @@ class BigQueryTest extends TestCase
     {
         // getClient() must return the injected client without touching env/key file
         $this->assertSame($this->client, $this->bigQuery->getClient());
+    }
+
+    public function testKeyFilePathResolvesRelativeToTheLoadedEnvDirectory(): void
+    {
+        $envDir = $this->createKeyFile();
+        $_ENV[EnvironmentLoader::ENV_DIR] = $envDir;
+        $_ENV['BQ_KEY_FILE'] = 'service-account-key.json';
+
+        // The key sits next to its .env, so the sync works from any cwd
+        $this->assertSame($envDir . '/service-account-key.json', $this->bigQuery->getKeyFilePath());
+    }
+
+    public function testKeyFilePathKeepsAbsolutePaths(): void
+    {
+        $envDir = $this->createKeyFile();
+        $_ENV[EnvironmentLoader::ENV_DIR] = '/somewhere/else';
+        $_ENV['BQ_KEY_FILE'] = $envDir . '/service-account-key.json';
+
+        $this->assertSame($envDir . '/service-account-key.json', $this->bigQuery->getKeyFilePath());
+    }
+
+    public function testMissingKeyFileErrorNamesTheResolvedPath(): void
+    {
+        $_ENV[EnvironmentLoader::ENV_DIR] = '/configs/client-a';
+        $_ENV['BQ_KEY_FILE'] = 'service-account-key.json';
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('/configs/client-a/service-account-key.json');
+
+        $this->bigQuery->getKeyFilePath();
     }
 }

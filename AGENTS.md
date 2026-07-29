@@ -26,6 +26,7 @@ negocio ni a clientes concretos:
 
 ```
 bin/console                       Punto de entrada CLI (Symfony Console)
+src/Config/EnvironmentLoader      Selección y carga del .env del entorno (--env)
 src/Console/Commands/SyncCommand  Comando `sync`
 src/Services/SyncService          Lógica de sincronización (batches, unbuffered, waitJob)
 src/Database/Mysql                Conexión MySQL (Doctrine DBAL) y tipos custom
@@ -35,7 +36,13 @@ src/Doctrine/                     Tipos Doctrine custom (date / datetime para Bi
 
 ## Configuración
 
-Vía `.env` (cargado con `vlucas/phpdotenv`). Variables principales:
+Vía `.env` (cargado con `vlucas/phpdotenv`). Se elige con `--env=<nombre>`
+(busca `<CONFIG_DIR>/<nombre>/.env`, por defecto `<proyecto>/envs/`) o con
+`--env-file=<ruta>`; sin ninguna de las dos se carga `<cwd>/.env`, como antes.
+`BQ_KEY_FILE` y `CACHE_DIR` relativos se resuelven contra el directorio del
+`.env` cargado (variable derivada `ENV_DIR`), no contra el `cwd`.
+
+Variables principales:
 
 ```
 BQ_PROJECT_ID       ID del proyecto en GCP
@@ -47,6 +54,7 @@ IGNORE_COLUMNS      Columnas a omitir (separadas por coma)
 CREATED_AT_LOOKBACK Ventana para filtros created_at (ej. "-8 days")
 MAX_ROWS_PER_BATCH  Filas por batch (default 600000)
 CACHE_DIR           Directorio para los JSON temporales
+CONFIG_DIR          Directorio que contiene los entornos (default <proyecto>/envs)
 ```
 
 ## Entorno de desarrollo
