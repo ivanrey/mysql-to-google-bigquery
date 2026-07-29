@@ -23,6 +23,13 @@ class EnvironmentLoader
     public const ENV_DIR = 'ENV_DIR';
 
     /**
+     * Derived variable holding the URI the configuration came from, when it
+     * was not a file. Relative paths have no base directory in that case, so
+     * resolvePath() rejects them instead of silently falling back to the cwd.
+     */
+    public const CONFIG_SOURCE = 'CONFIG_SOURCE';
+
+    /**
      * Directory holding one subdirectory per environment. Overridable with
      * --config-dir or the CONFIG_DIR environment variable.
      */
@@ -59,13 +66,39 @@ class EnvironmentLoader
      */
     public function load(?string $env = null, ?string $envFile = null, ?string $configDir = null): ?string
     {
+        $this->importRealEnvironment();
+
         $source = $this->loadSource($env, $envFile, $configDir);
 
         // Runs even without a .env: the references can come from the real
         // environment of the process too
-        $this->resolver()->resolveEnvironmentVariables();
+        $this->resolver()->resolveEnvironmentVariables([self::ENV_DIR, self::CONFIG_SOURCE]);
 
         return $source;
+    }
+
+    /**
+     * Copy the real environment of the process into $_ENV.
+     *
+     * PHP CLI ships with variables_order="GPCS", which leaves $_ENV empty —
+     * and $_ENV is where this project reads its configuration from. Without
+     * this, an exported DB_PASSWORD=sm://… would never be seen (let alone
+     * resolved), and the immutability of the loaded .env would be decided
+     * against an empty set instead of against the actual environment.
+     */
+    private function importRealEnvironment(): void
+    {
+        $environment = getenv();
+
+        if (!is_array($environment)) {
+            return;
+        }
+
+        foreach ($environment as $name => $value) {
+            // Already-present values win: this only fills the gaps left by
+            // variables_order, it never overrides what is in $_ENV
+            $_ENV[$name] ??= $value;
+        }
     }
 
     /**
@@ -86,7 +119,10 @@ class EnvironmentLoader
             // A URI (sm://, pm://) instead of a path: the whole configuration
             // comes from Google Cloud, so nothing has to sit on this disk
             if ($this->resolver()->isReference($envFile)) {
-                $this->loadContents($this->resolver()->read($envFile));
+                $this->loadContents($this->resolver()->read($envFile), $envFile);
+
+                // No directory to resolve relative paths against
+                $_ENV[self::CONFIG_SOURCE] = $envFile;
 
                 return $envFile;
             }
@@ -133,11 +169,22 @@ class EnvironmentLoader
             return $path;
         }
 
-        $base = (isset($_ENV[self::ENV_DIR]) && $_ENV[self::ENV_DIR] !== '')
-            ? $_ENV[self::ENV_DIR]
-            : getcwd();
+        if (isset($_ENV[self::ENV_DIR]) && $_ENV[self::ENV_DIR] !== '') {
+            return rtrim($_ENV[self::ENV_DIR], '/') . '/' . $path;
+        }
 
-        return rtrim($base, '/') . '/' . $path;
+        // Configuration loaded from a URI: there is no directory to be
+        // relative to, and falling back to the cwd would bring back exactly
+        // the dependency this loader removes
+        if (isset($_ENV[self::CONFIG_SOURCE]) && $_ENV[self::CONFIG_SOURCE] !== '') {
+            throw new \RuntimeException(
+                'Cannot resolve the relative path "' . $path . '": the configuration comes from "' .
+                $_ENV[self::CONFIG_SOURCE] . '", which has no directory. Use an absolute path, ' .
+                'or keep the value in Secret Manager (sm://…).'
+            );
+        }
+
+        return rtrim(getcwd(), '/') . '/' . $path;
     }
 
     /**
@@ -189,12 +236,36 @@ class EnvironmentLoader
      * already defined in the environment wins.
      *
      * @param string $contents .env formatted contents
+     * @param string $source   URI the contents came from, for error messages
      */
-    private function loadContents(string $contents): void
+    private function loadContents(string $contents, string $source): void
     {
+        $trimmed = ltrim($contents);
+
+        if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
+            throw new \RuntimeException(
+                'The configuration read from "' . $source . '" looks like JSON, but it has to be ' .
+                '.env content (NAME=value lines). A Parameter Manager parameter must be created ' .
+                'with the UNFORMATTED format for this; JSON and YAML parameters are not supported.'
+            );
+        }
+
+        try {
+            $variables = Dotenv::parse($contents);
+        } catch (\Throwable $e) {
+            // The parser quotes the offending line, and here that line is the
+            // payload of a secret: report the source, never the message (not
+            // even as a previous exception, which -v would print)
+            throw new \RuntimeException(
+                'The configuration read from "' . $source . '" is not valid .env content. ' .
+                'The parser error is omitted on purpose: it quotes the offending line, ' .
+                'which may hold a secret. Check the payload for unquoted values with spaces.'
+            );
+        }
+
         $repository = RepositoryBuilder::createWithDefaultAdapters()->immutable()->make();
 
-        foreach (Dotenv::parse($contents) as $name => $value) {
+        foreach ($variables as $name => $value) {
             if ($value !== null) {
                 $repository->set($name, $value);
             }

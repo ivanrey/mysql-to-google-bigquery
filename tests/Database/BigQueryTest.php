@@ -414,6 +414,30 @@ class BigQueryTest extends TestCase
         $this->assertSame(['type' => 'service_account'], $this->bigQuery->getKeyFile());
     }
 
+    public function testUnreadableKeyFileIsReportedAsAReadError(): void
+    {
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->markTestSkipped('root reads any file, permissions cannot be exercised');
+        }
+
+        // Exists but cannot be read, like a key file the cron user has no
+        // access to: "invalid JSON" would point at the wrong problem
+        $envDir = $this->createKeyFile();
+        chmod($envDir . '/service-account-key.json', 0000);
+
+        $_ENV[EnvironmentLoader::ENV_DIR] = $envDir;
+        $_ENV['BQ_KEY_FILE'] = 'service-account-key.json';
+
+        try {
+            $this->expectException(\Exception::class);
+            $this->expectExceptionMessage('Could not read');
+
+            $this->bigQuery->getKeyFile();
+        } finally {
+            chmod($envDir . '/service-account-key.json', 0644);
+        }
+    }
+
     public function testInvalidKeyContentsFailWithoutEchoingTheCredential(): void
     {
         $_ENV['BQ_KEY_FILE'] = '{not really json';

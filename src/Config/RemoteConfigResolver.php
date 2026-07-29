@@ -83,19 +83,32 @@ class RemoteConfigResolver
     }
 
     /**
-     * Replace every reference sitting in $_ENV by its value.
+     * Replace every reference sitting in the environment by its value.
      *
      * Runs after the .env is loaded, so it covers variables coming from the
-     * file, from a rendered parameter or from the real environment alike.
+     * file, from a rendered parameter or from the real environment alike —
+     * the latter reached through getenv(), because PHP CLI defaults to
+     * variables_order="GPCS" and leaves them out of $_ENV.
      *
-     * @return string[] Names of the variables that were resolved (never their values)
+     * @param  string[] $skip Variables to leave alone, even if they hold a URI
+     *                        (the loader's own derived ones do: CONFIG_SOURCE
+     *                        *is* the reference the configuration came from,
+     *                        and resolving it would replace it by the payload)
+     * @return string[]       Names of the variables that were resolved (never their values)
      */
-    public function resolveEnvironmentVariables(): array
+    public function resolveEnvironmentVariables(array $skip = []): array
     {
+        $variables = $_ENV;
+
+        $environment = getenv();
+        if (is_array($environment)) {
+            $variables += $environment;
+        }
+
         $resolved = [];
 
-        foreach ($_ENV as $name => $value) {
-            if (!$this->isReference($value)) {
+        foreach ($variables as $name => $value) {
+            if (in_array($name, $skip, true) || !$this->isReference($value)) {
                 continue;
             }
 

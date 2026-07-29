@@ -30,7 +30,10 @@ class EnvironmentLoaderTest extends TestCase
     {
         chdir($this->originalCwd);
         $this->removeDirectory($this->tmpDir);
-        putenv('CONFIG_DIR');
+
+        foreach (['CONFIG_DIR', 'DB_PASSWORD', 'BQ_DATASET'] as $variable) {
+            putenv($variable);
+        }
 
         $_ENV = $this->originalEnv;
         $_SERVER = $this->originalServer;
@@ -318,6 +321,83 @@ class EnvironmentLoaderTest extends TestCase
 
         // Same immutability as a .env file
         $this->assertSame('from_environment', $_ENV['BQ_DATASET']);
+    }
+
+    public function testMalformedRemotePayloadFailsWithoutLeakingItsContents(): void
+    {
+        // phpdotenv quotes the offending line in its message ("Encountered
+        // unexpected whitespace at [p@ss word]"); here that line is a secret
+        $resolver = $this->resolverWith(['sm://client-a-env' => "DB_PASSWORD=p@ss word\n"]);
+
+        try {
+            $this->loader($resolver)->load(envFile: 'sm://client-a-env');
+            $this->fail('Expected the malformed payload to be rejected');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('sm://client-a-env', $e->getMessage());
+            $this->assertStringNotContainsString('p@ss word', $e->getMessage());
+            // Nor through a previous exception, which -v would print
+            $this->assertNull($e->getPrevious());
+        }
+    }
+
+    public function testJsonPayloadFailsWithAHintAboutTheParameterFormat(): void
+    {
+        $resolver = $this->resolverWith(['pm://client-a' => '{"DB_PASSWORD": "s3cret"}']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('UNFORMATTED');
+
+        $this->loader($resolver)->load(envFile: 'pm://client-a');
+    }
+
+    public function testReferencesExportedInTheRealEnvironmentAreResolved(): void
+    {
+        $empty = $this->tmpDir . '/empty';
+        mkdir($empty, 0777, true);
+        chdir($empty);
+
+        // Exported by the crontab, not written in a .env: PHP CLI defaults to
+        // variables_order="GPCS", so it never reaches $_ENV on its own
+        putenv('DB_PASSWORD=sm://db-pass');
+        $this->assertArrayNotHasKey('DB_PASSWORD', $_ENV);
+
+        $this->loader($this->resolverWith(['sm://db-pass' => 's3cret']))->load();
+
+        $this->assertSame('s3cret', $_ENV['DB_PASSWORD']);
+    }
+
+    public function testTheRealEnvironmentWinsOverTheLoadedFile(): void
+    {
+        $this->writeEnvFile($this->projectRoot . '/envs/client-a/.env', ['BQ_DATASET' => 'from_file']);
+        putenv('BQ_DATASET=from_real_environment');
+
+        $this->loader()->load(env: 'client-a');
+
+        $this->assertSame('from_real_environment', $_ENV['BQ_DATASET']);
+    }
+
+    public function testRelativePathsAreRejectedWhenTheConfigurationIsRemote(): void
+    {
+        $resolver = $this->resolverWith([
+            'sm://client-a-env' => "BQ_KEY_FILE=service-account-key.json\n",
+        ]);
+
+        $this->loader($resolver)->load(envFile: 'sm://client-a-env');
+
+        // No directory to be relative to: failing loudly beats resolving
+        // against whatever directory the cron happened to run from
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('sm://client-a-env');
+
+        EnvironmentLoader::resolvePath('service-account-key.json');
+    }
+
+    public function testAbsolutePathsStillWorkWithARemoteConfiguration(): void
+    {
+        $resolver = $this->resolverWith(['sm://client-a-env' => "BQ_DATASET=remote\n"]);
+        $this->loader($resolver)->load(envFile: 'sm://client-a-env');
+
+        $this->assertSame('/etc/keys/key.json', EnvironmentLoader::resolvePath('/etc/keys/key.json'));
     }
 
     public function testResolvePathUsesTheEnvDirectoryForRelativePaths(): void

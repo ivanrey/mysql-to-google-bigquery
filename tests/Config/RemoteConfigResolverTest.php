@@ -74,6 +74,38 @@ class RemoteConfigResolverTest extends TestCase
         $this->assertSame('reporting', $_ENV['DB_USERNAME']);
     }
 
+    public function testReferencesOnlyPresentInTheRealEnvironmentAreResolved(): void
+    {
+        // PHP CLI defaults to variables_order="GPCS": an exported variable
+        // never reaches $_ENV on its own
+        putenv('DB_PASSWORD=sm://db-pass');
+
+        try {
+            $resolver = new RemoteConfigResolver(new FakeConfigReader('sm', ['sm://db-pass' => 's3cret']));
+
+            $this->assertSame(['DB_PASSWORD'], $resolver->resolveEnvironmentVariables());
+            $this->assertSame('s3cret', $_ENV['DB_PASSWORD']);
+        } finally {
+            putenv('DB_PASSWORD');
+        }
+    }
+
+    public function testSkippedVariablesAreLeftUntouched(): void
+    {
+        // CONFIG_SOURCE holds the reference the configuration came from:
+        // resolving it would overwrite it with the whole payload
+        $_ENV['CONFIG_SOURCE'] = 'sm://client-a-env';
+        $_ENV['DB_PASSWORD'] = 'sm://db-pass';
+
+        $resolver = new RemoteConfigResolver(new FakeConfigReader('sm', [
+            'sm://client-a-env' => "DB_PASSWORD=sm://db-pass\n",
+            'sm://db-pass' => 's3cret',
+        ]));
+
+        $this->assertSame(['DB_PASSWORD'], $resolver->resolveEnvironmentVariables(['CONFIG_SOURCE']));
+        $this->assertSame('sm://client-a-env', $_ENV['CONFIG_SOURCE']);
+    }
+
     public function testFailureNamesTheVariableAndTheReferenceButNotTheValue(): void
     {
         $_ENV['DB_PASSWORD'] = 'sm://missing';

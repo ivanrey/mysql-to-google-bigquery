@@ -136,6 +136,10 @@ bin/console sync log_entries -o id --env=client-a
   resolved against the current directory.
 - Without either flag, `<cwd>/.env` is loaded, as it always was.
 
+Variables already present in the environment of the process win over the ones
+in the loaded configuration, so a single value can be overridden for one run
+(`BQ_DATASET=staging bin/console sync …`) without touching the file.
+
 Relative `BQ_KEY_FILE` and `CACHE_DIR` values are resolved **against the
 directory of the loaded `.env`**, not against the current directory, so each
 environment can keep its key next to its configuration.
@@ -155,6 +159,13 @@ DB_PASSWORD=sm://db-pass            # short form: BQ_PROJECT_ID, latest version
 DB_PASSWORD=sm://db-pass/versions/3 # pinned version
 ```
 
+References also work when they are **exported in the environment** instead of
+written in a file:
+
+```bash
+DB_PASSWORD=sm://db-pass bin/console sync log_entries -o id --env=client-a
+```
+
 **The whole configuration from Google Cloud** — `--env-file` also takes a
 reference instead of a path:
 
@@ -167,6 +178,13 @@ bin/console sync log_entries -o id --env-file=sm://client-a-env
 # and Secret Manager holds the sensitive values
 bin/console sync log_entries -o id --env-file=pm://client-a
 ```
+
+The payload must be `.env` content (`NAME=value` lines), so a Parameter Manager
+parameter has to be created with the **`UNFORMATTED`** format — JSON and YAML
+parameters are rejected with a clear error. Since a remote configuration has no
+directory, `BQ_KEY_FILE` and `CACHE_DIR` must be **absolute paths** (or, for the
+key, a `sm://` reference); a relative one fails instead of being resolved
+against whatever directory the cron happened to run from.
 
 **No key file at all** — leave `BQ_KEY_FILE` unset and BigQuery authenticates
 with the same Application Default Credentials; or point it at a secret

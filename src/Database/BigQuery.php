@@ -282,8 +282,14 @@ class BigQuery
             $contents = $keyFile;
             $source = 'the BQ_KEY_FILE secret';
         } else {
-            $contents = file_get_contents($this->getKeyFilePath());
             $source = $this->getKeyFilePath();
+            $contents = @file_get_contents($source);
+
+            if ($contents === false) {
+                // Exists (getKeyFilePath checked) but could not be read:
+                // usually permissions, which "invalid JSON" would hide
+                throw new \Exception('Could not read the Google Service Account key file ' . $source, 1);
+            }
         }
 
         $decoded = json_decode($contents, true);
