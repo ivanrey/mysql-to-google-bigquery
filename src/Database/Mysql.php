@@ -7,6 +7,9 @@ class Mysql
 {
     protected $conn;
 
+    /** @var array<string, array> Introspected columns, keyed by "<database>.<table>" */
+    protected $tableColumns = [];
+
     /**
      * Configure and connect to MySQL Database
      * @param  string $databaseName      Database name
@@ -100,16 +103,29 @@ class Mysql
 
     /**
      * Return the table columns
+     *
+     * Memoized: introspectTable() costs ~4 information_schema queries and the
+     * sync asks for the same schema repeatedly (once to validate, once per
+     * batch). The schema is not expected to change mid-sync — processRow()
+     * already assumes it.
+     *
      * @param  string $databaseName Database name
      * @param  string $tableName    Table name
      * @return array                Array of Doctrine\DBAL\Schema\Column
      */
     public function getTableColumns($databaseName, $tableName)
     {
+        $key = $databaseName . '.' . $tableName;
+
+        if (isset($this->tableColumns[$key])) {
+            return $this->tableColumns[$key];
+        }
+
         $mysqlConnection = $this->getConnection($databaseName);
         $mysqlSchemaManager = $mysqlConnection->createSchemaManager();
 
         $mysqlTableDetails = $mysqlSchemaManager->introspectTable($tableName);
-        return $mysqlTableDetails->getColumns();
+
+        return $this->tableColumns[$key] = $mysqlTableDetails->getColumns();
     }
 }
