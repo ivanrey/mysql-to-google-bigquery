@@ -224,6 +224,77 @@ with the same Application Default Credentials; or point it at a secret
 (`BQ_KEY_FILE=sm://bq-service-account`) and the key is used from memory,
 without ever being written to disk.
 
+#### Example: a parameter holding the `.env`, with the password in a secret
+
+The parameter keeps the configuration in the clear and points at Secret Manager
+where a value is sensitive. Rendering resolves the references, so one API call
+returns the complete `.env`.
+
+Create the secret (`printf`, not `echo`: a trailing newline would end up inside
+the password), then the parameter, `unformatted` because its payload is `.env`
+content:
+
+```bash
+printf 's3cr3t' | gcloud secrets create db-pass --data-file=- --project=my-project
+```
+
+```bash
+gcloud parametermanager parameters create client-a --parameter-format=unformatted --location=global --project=my-project
+```
+
+```bash
+gcloud parametermanager parameters versions create v1 --parameter=client-a --location=global --project=my-project --payload-data="$(cat <<'EOF'
+BQ_PROJECT_ID=my-project
+BQ_DATASET=analytics
+BQ_LOCATION=southamerica-east1
+
+DB_HOST=10.0.0.5
+DB_USERNAME=reporting
+DB_PASSWORD='__REF__("//secretmanager.googleapis.com/projects/my-project/secrets/db-pass/versions/latest")'
+DB_DATABASE_NAME=production
+
+IGNORE_COLUMNS=password,remember_token
+EOF
+)"
+```
+
+Note the **single quotes** around `__REF__`: rendering is a textual
+substitution, so the line becomes `DB_PASSWORD='s3cr3t'`. Without them a secret
+containing spaces or `#` would break the `.env` parsing — and that error hides
+the offending line on purpose, because it would be the password. Single rather
+than double quotes so that a `$` in the password is not interpolated.
+
+The secret is read by the **parameter's own identity**, not by the host, so the
+machine running the sync only ever needs access to the parameter:
+
+```bash
+gcloud parametermanager parameters describe client-a --location=global --project=my-project --format="value(policyMember.iamPolicyUidPrincipal)"
+```
+
+```bash
+gcloud secrets add-iam-policy-binding db-pass --project=my-project --member="PRINCIPAL_FROM_THE_PREVIOUS_COMMAND" --role="roles/secretmanager.secretAccessor"
+```
+
+```bash
+gcloud parametermanager parameters add-iam-policy-binding client-a --location=global --project=my-project --member="serviceAccount:sync@my-project.iam.gserviceaccount.com" --role="roles/parametermanager.parameterAccessor"
+```
+
+And then:
+
+```bash
+bin/console sync log_entries -o id --env-file=pm://client-a
+```
+
+`pm://client-a` is the short form of
+`pm://projects/my-project/locations/global/parameters/client-a/versions/latest`.
+In production, prefer the long form pinned to a version (`…/versions/v1`), so a
+configuration change only reaches the cron when you move the pointer.
+
+`__REF__` and `sm://` can be mixed in the same parameter. `__REF__` is resolved
+by Parameter Manager during the render — one API call, and the host needs no
+access to the secret; `sm://` is resolved by this tool afterwards — one extra
+call per reference, and the host needs `secretAccessor` itself.
+
 Values are read on every run and never cached on disk. Regional secrets and
 parameters are reached through their regional endpoint automatically.
 
