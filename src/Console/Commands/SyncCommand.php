@@ -50,6 +50,13 @@ class SyncCommand extends Command
                 InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY,
                 'Ignore a column from syncing. You can use this option multiple times'
             )
+            ->addOption(
+                'partition-type',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Partition granularity by created_at when the table is created: DAY, MONTH, YEAR or NONE. ' .
+                'Defaults to PARTITION_TYPE_<TABLE>, PARTITION_TYPE, or MONTH'
+            )
             ->addOption('database-name', null, InputOption::VALUE_OPTIONAL, 'MySQL database name')
             ->addOption('bigquery-table-name', null, InputOption::VALUE_OPTIONAL, 'BigQuery table name');
     }
@@ -107,7 +114,8 @@ class SyncCommand extends Command
             $ignoreColumns,
             $output,
             (bool) $input->getOption('no-data'),
-            (bool) $input->getOption('un-buffer')
+            (bool) $input->getOption('un-buffer'),
+            $input->getOption('partition-type')
         );
 
         return Command::SUCCESS;
