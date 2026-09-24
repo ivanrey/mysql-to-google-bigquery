@@ -124,6 +124,63 @@ class SyncCommandTest extends TestCase
         $this->assertSame(0, $exitCode);
     }
 
+    public function testPartitionTypeOptionReachesTheService(): void
+    {
+        $service = $this->createMock(SyncService::class);
+        $service->expects($this->once())
+            ->method('execute')
+            ->with(
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                'DAY'                // --partition-type
+            );
+
+        $tester = $this->applicationTester($service);
+        $exitCode = $tester->run([
+            'command' => 'sync',
+            'table-name' => 'users',
+            '--database-name' => 'mydb',
+            '--partition-type' => 'DAY',
+        ]);
+
+        $this->assertSame(0, $exitCode);
+    }
+
+    public function testPartitionTypeOptionDefaultsToNullSoTheEnvDecides(): void
+    {
+        $service = $this->createMock(SyncService::class);
+        $service->expects($this->once())
+            ->method('execute')
+            ->with(
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                null
+            );
+
+        $tester = $this->applicationTester($service);
+        $tester->run([
+            'command' => 'sync',
+            'table-name' => 'users',
+            '--database-name' => 'mydb',
+        ]);
+    }
+
     public function testFlagsDefaultToFalse(): void
     {
         $service = $this->createMock(SyncService::class);

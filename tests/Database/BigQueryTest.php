@@ -1,6 +1,9 @@
 <?php
 namespace MysqlToGoogleBigQuery\Tests\Database;
 
+use Doctrine\DBAL\Schema\Column;
+use Doctrine\DBAL\Types\Type;
+use Doctrine\DBAL\Types\Types;
 use Google\Cloud\BigQuery\BigQueryClient;
 use Google\Cloud\BigQuery\Dataset;
 use Google\Cloud\BigQuery\Job;
@@ -35,7 +38,10 @@ class BigQueryTest extends TestCase
             $_ENV[EnvironmentLoader::ENV_DIR],
             $_ENV['CREATED_AT_LOOKBACK'],
             $_ENV['CREATED_AT_LOOKBACK_USERS'],
-            $_ENV['CREATED_AT_LOOKBACK_USER_LOGS']
+            $_ENV['CREATED_AT_LOOKBACK_USER_LOGS'],
+            $_ENV['PARTITION_TYPE'],
+            $_ENV['PARTITION_TYPE_USERS'],
+            $_ENV['PARTITION_TYPE_USER_LOGS']
         );
 
         if (isset($this->keyFileDir)) {
@@ -209,6 +215,198 @@ class BigQueryTest extends TestCase
         $this->expectExceptionMessage('CREATED_AT_LOOKBACK_USERS');
 
         $this->bigQuery->getCreatedAtLookback('users');
+    }
+
+    /**
+     * Column double whose Doctrine type has the given name
+     */
+    private function columnOfType(string $typeName): Column
+    {
+        $type = $this->createMock(Type::class);
+        $type->method('getName')->willReturn($typeName);
+
+        $column = $this->createMock(Column::class);
+        $column->method('getType')->willReturn($type);
+
+        return $column;
+    }
+
+    /**
+     * Stub the dataset and capture the options createTable() sends
+     */
+    private function expectCreateTable(?array &$capturedOptions): void
+    {
+        $dataset = $this->createMock(Dataset::class);
+        $dataset->expects($this->once())
+            ->method('createTable')
+            ->willReturnCallback(function (string $name, array $options) use (&$capturedOptions) {
+                $capturedOptions = $options;
+                return $this->createMock(Table::class);
+            });
+
+        $this->client->method('dataset')->with('my_dataset')->willReturn($dataset);
+    }
+
+    public function testPartitionTypeDefaultsToMonth(): void
+    {
+        $this->assertSame('MONTH', $this->bigQuery->getPartitionType('users'));
+    }
+
+    public function testPartitionTypeUsesGlobalEnvVariable(): void
+    {
+        $_ENV['PARTITION_TYPE'] = 'DAY';
+
+        $this->assertSame('DAY', $this->bigQuery->getPartitionType('users'));
+    }
+
+    public function testPerTablePartitionTypeWinsOverGlobal(): void
+    {
+        $_ENV['PARTITION_TYPE'] = 'DAY';
+        $_ENV['PARTITION_TYPE_USER_LOGS'] = 'YEAR';
+
+        // Same table name normalization as CREATED_AT_LOOKBACK_<TABLE>
+        $this->assertSame('YEAR', $this->bigQuery->getPartitionType('user-logs'));
+        $this->assertSame('DAY', $this->bigQuery->getPartitionType('orders'));
+    }
+
+    public function testCommandLinePartitionTypeWinsOverEnv(): void
+    {
+        $_ENV['PARTITION_TYPE'] = 'DAY';
+        $_ENV['PARTITION_TYPE_USERS'] = 'YEAR';
+
+        $this->assertSame('MONTH', $this->bigQuery->getPartitionType('users', 'MONTH'));
+    }
+
+    public function testBlankCommandLinePartitionTypeFallsBackToEnv(): void
+    {
+        $_ENV['PARTITION_TYPE'] = 'DAY';
+
+        $this->assertSame('DAY', $this->bigQuery->getPartitionType('users', '  '));
+    }
+
+    public function testEmptyPartitionTypeFallsBackToDefault(): void
+    {
+        $_ENV['PARTITION_TYPE_USERS'] = '';
+        $_ENV['PARTITION_TYPE'] = ' ';
+
+        $this->assertSame('MONTH', $this->bigQuery->getPartitionType('users'));
+    }
+
+    public function testPartitionTypeIsCaseInsensitiveAndTrimmed(): void
+    {
+        $_ENV['PARTITION_TYPE'] = '  day ';
+
+        $this->assertSame('DAY', $this->bigQuery->getPartitionType('users'));
+    }
+
+    public function testPartitionTypeNoneDisablesPartitioning(): void
+    {
+        $_ENV['PARTITION_TYPE_USERS'] = 'none';
+
+        $this->assertNull($this->bigQuery->getPartitionType('users'));
+    }
+
+    public function testInvalidPartitionTypeNamesTheOffendingVariable(): void
+    {
+        $_ENV['PARTITION_TYPE_USERS'] = 'WEEK';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid partition type "WEEK" in PARTITION_TYPE_USERS');
+
+        $this->bigQuery->getPartitionType('users');
+    }
+
+    public function testInvalidCommandLinePartitionTypeNamesTheOption(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('in --partition-type');
+
+        $this->bigQuery->getPartitionType('users', 'HOUR');
+    }
+
+    public function testPartitionColumnIsCreatedAtWhenItIsADatetime(): void
+    {
+        $columns = [
+            'id' => $this->columnOfType(Types::INTEGER),
+            'created_at' => $this->columnOfType('bigquerydatetime'),
+        ];
+
+        $this->assertSame('created_at', $this->bigQuery->getPartitionColumn($columns));
+    }
+
+    public function testPartitionColumnAcceptsADate(): void
+    {
+        $columns = ['created_at' => $this->columnOfType('bigquerydate')];
+
+        $this->assertSame('created_at', $this->bigQuery->getPartitionColumn($columns));
+    }
+
+    public function testNoPartitionColumnWithoutCreatedAt(): void
+    {
+        $columns = ['id' => $this->columnOfType(Types::INTEGER)];
+
+        $this->assertNull($this->bigQuery->getPartitionColumn($columns));
+    }
+
+    public function testNoPartitionColumnWhenCreatedAtIsIgnored(): void
+    {
+        // Ignored means all NULLs in BigQuery: every row in one partition
+        $columns = ['created_at' => $this->columnOfType('bigquerydatetime')];
+
+        $this->assertNull($this->bigQuery->getPartitionColumn($columns, ['created_at']));
+    }
+
+    public function testNoPartitionColumnWhenCreatedAtIsNotADate(): void
+    {
+        // A VARCHAR created_at becomes a STRING, which BigQuery can't partition by
+        $columns = ['created_at' => $this->columnOfType(Types::STRING)];
+
+        $this->assertNull($this->bigQuery->getPartitionColumn($columns));
+    }
+
+    public function testCreateTablePartitionsByCreatedAt(): void
+    {
+        $this->expectCreateTable($options);
+
+        $this->bigQuery->createTable('users', [
+            'id' => $this->columnOfType(Types::INTEGER),
+            'created_at' => $this->columnOfType('bigquerydatetime'),
+        ], 'MONTH');
+
+        $this->assertSame(['type' => 'MONTH', 'field' => 'created_at'], $options['timePartitioning']);
+        $this->assertSame([
+            ['name' => 'id', 'type' => 'INTEGER'],
+            ['name' => 'created_at', 'type' => 'DATETIME'],
+        ], $options['schema']['fields']);
+    }
+
+    public function testCreateTableWithoutPartitionTypeIsUnpartitioned(): void
+    {
+        $this->expectCreateTable($options);
+
+        $this->bigQuery->createTable('users', ['id' => $this->columnOfType(Types::INTEGER)]);
+
+        $this->assertArrayNotHasKey('timePartitioning', $options);
+    }
+
+    public function testCreateTableMapsMysqlTypes(): void
+    {
+        $this->expectCreateTable($options);
+
+        $this->bigQuery->createTable('users', [
+            'a' => $this->columnOfType('bigquerydate'),
+            'b' => $this->columnOfType(Types::BIGINT),
+            'c' => $this->columnOfType(Types::BOOLEAN),
+            'd' => $this->columnOfType(Types::DATE_MUTABLE),
+            'e' => $this->columnOfType(Types::DECIMAL),
+            'f' => $this->columnOfType(Types::TIME_MUTABLE),
+            'g' => $this->columnOfType(Types::JSON),
+        ]);
+
+        $this->assertSame(
+            ['DATE', 'INTEGER', 'BOOLEAN', 'DATETIME', 'FLOAT', 'TIME', 'STRING'],
+            array_column($options['schema']['fields'], 'type')
+        );
     }
 
     public function testDeleteColumnValueHonorsCreatedAtLookback(): void

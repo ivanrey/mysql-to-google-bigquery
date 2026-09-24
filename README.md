@@ -24,6 +24,7 @@ load jobs. It is meant to run unattended from a cron.
   + [Incremental (`--order-column`)](#incremental---order-column)
   + [Full dump (`--un-buffer --delete-table`)](#full-dump---un-buffer---delete-table)
   + [Row count diff (no flags)](#row-count-diff-no-flags)
++ [Partitioning](#partitioning)
 + [Type mapping](#type-mapping)
 + [Running from cron](#running-from-cron)
 + [Troubleshooting](#troubleshooting)
@@ -110,6 +111,8 @@ file (parsed with [phpdotenv](https://github.com/vlucas/phpdotenv)).
 | `CACHE_DIR` | `<project>/cache` | Where the temporary JSON files are written. Needs free space for one batch |
 | `CREATED_AT_LOOKBACK` | `-3 month` | How far back the incremental filters look, see [Incremental](#incremental---order-column) |
 | `CREATED_AT_LOOKBACK_<TABLE>` | — | Per-table override of the above |
+| `PARTITION_TYPE` | `MONTH` | Partitioning of the tables the tool creates: `DAY`, `MONTH`, `YEAR` or `NONE`. See [Partitioning](#partitioning) |
+| `PARTITION_TYPE_<TABLE>` | — | Per-table override of the above |
 | `CONFIG_DIR` | `<project>/envs` | Directory holding the environments. Read from the real environment or `--config-dir`, **not** from a `.env` |
 
 A minimal `.env`:
@@ -312,6 +315,7 @@ bin/console sync <table-name> [options]
 | `-o`, `--order-column=<column>` | Sync incrementally by this column (typically the primary key). See [Incremental](#incremental---order-column) |
 | `-i`, `--ignore-column=<column>` | Do not copy this column. Repeatable; defaults to `IGNORE_COLUMNS` |
 | `-c`, `--create-table` | Create the BigQuery table from the MySQL schema if it does not exist |
+| `--partition-type=<type>` | Partitioning of the table when it is created (`DAY`, `MONTH`, `YEAR`, `NONE`), overriding `PARTITION_TYPE`. See [Partitioning](#partitioning) |
 | `-d`, `--delete-table` | Drop and recreate the table before syncing (full reload). Combined with `--un-buffer` the data is replaced instead of the table being dropped |
 | `--un-buffer` | Stream the whole table instead of paginating. Requires `--delete-table`. See [Full dump](#full-dump---un-buffer---delete-table) |
 | `--no-data` | Only handle the schema, copy no rows |
@@ -342,7 +346,9 @@ and copies only what is missing:
 synced incrementally must have one**. The sync fails early with a clear error if
 it is missing or listed in `IGNORE_COLUMNS` — before any destructive step, so a
 `--delete-table` run does not drop the table first. Tables without `created_at`
-can still be synced with `--un-buffer --delete-table`.
+can still be synced with `--un-buffer --delete-table`. The filter only makes
+the queries cheaper if the table is [partitioned](#partitioning) by
+`created_at`, which is what the tool does when it creates the table.
 
 **The lookback window** is how far back that filter looks. Any
 `strtotime()`-parseable expression, and it must look backwards (`8 days`,
@@ -374,8 +380,8 @@ drifted.
 The reload is atomic: the load job runs with `WRITE_TRUNCATE`, so the data is
 replaced when the job commits and the table is **never left empty**. The table
 is not physically dropped either, which means **the existing BigQuery schema is
-kept** — to pick up a MySQL schema change, run `--delete-table` *without*
-`--un-buffer` once.
+kept**, partitioning included — to pick up a MySQL schema change or a new
+partitioning, run `--delete-table` *without* `--un-buffer` once.
 
 `--un-buffer` requires `--delete-table`: without it, a re-run would append the
 whole table again and duplicate every row.
@@ -388,6 +394,70 @@ difference, offsetting by the number of rows already in BigQuery. It assumes an
 MySQL the counts stop matching up and the table stops syncing (it reports
 "Already synced"). Prefer the incremental mode whenever the table has a
 monotonic column.
+
+## Partitioning
+
+Every incremental run queries BigQuery twice for `MAX(<order column>)` and
+once to `DELETE` the last value, all filtered by `created_at` inside the
+[lookback window](#incremental---order-column). On an unpartitioned table that
+filter prunes nothing: each query reads the whole `created_at` and order
+columns, and the bill grows with the history of the table even if the window
+is a few days.
+
+So the tables the tool creates (`--create-table`, `--delete-table`) are
+**partitioned by `created_at`**, and those queries only read the partitions
+inside the window.
+
+The granularity is resolved like the lookback, most specific first:
+
+1. `--partition-type=<type>`
+2. `PARTITION_TYPE_<TABLE>` (same table name normalization as
+   `CREATED_AT_LOOKBACK_<TABLE>`)
+3. `PARTITION_TYPE`
+4. `MONTH`
+
+```text
+# global
+PARTITION_TYPE=MONTH
+
+# per table
+PARTITION_TYPE_USER_LOGS=DAY
+PARTITION_TYPE_SETTINGS=NONE
+```
+
+| Value | When |
+|---|---|
+| `MONTH` | The default. A lookback of days reads one or two partitions, and it is safe for full dumps of any history |
+| `DAY` | Very large tables where a month is still a lot to read. **A single load job can modify at most 4000 partitions**, so a full dump of more than ~11 years of `created_at` fails with `DAY` |
+| `YEAR` | Small tables with a long history |
+| `NONE` | Create the table unpartitioned, like before |
+
+Things worth knowing:
+
+- **The partition column is always `created_at`**, the one the lookback
+  filters on: partitioning by any other column would not prune those queries.
+- A table without `created_at`, with `created_at` in `IGNORE_COLUMNS`, or where
+  it is not a `DATE`/`DATETIME`, is created **unpartitioned**, with a warning.
+- Rows with a `NULL` `created_at` are fine: BigQuery keeps them in a partition
+  of their own.
+- Partitioning only happens **when the table is created**. An existing table
+  keeps what it has, and `--partition-type` on an existing table only prints a
+  warning. `--un-buffer --delete-table` does not recreate the table either.
+- Tables under 10 MB see no difference: BigQuery bills at least 10 MB per
+  table referenced in a query.
+
+**Partitioning an existing table.** Either reload it from MySQL with
+`--delete-table` (without `--un-buffer`), or rewrite it inside BigQuery, which
+reads it once and does not touch MySQL:
+
+```sql
+CREATE OR REPLACE TABLE `my_dataset.log_entries`
+PARTITION BY DATETIME_TRUNC(created_at, MONTH)   -- DATE_TRUNC for a DATE column
+AS SELECT * FROM `my_dataset.log_entries`;
+```
+
+To check it works, compare the bytes a dry run of the `MAX()` would process
+before and after (`bq query --dry_run`, or the query validator in the console).
 
 ## Type mapping
 
@@ -433,6 +503,8 @@ of 15 minutes is a reasonable starting point.
 | `The column 'created_at' is being excluded with --ignore-column` | Same, but the column exists and is being ignored. Remove it from `IGNORE_COLUMNS` |
 | `has N rows, but none of them are inside the created_at lookback window` | The window is too short for how often this table gets new rows. Widen `CREATED_AT_LOOKBACK_<TABLE>`, or reload the table |
 | `Lookback expression … resolves to a future date` | The expression is missing its `-` (`8 days` instead of `-8 days`) |
+| `Invalid partition type "x" in PARTITION_TYPE…` | Use `DAY`, `MONTH`, `YEAR` or `NONE`. The message names the variable (or `--partition-type`) holding the bad value |
+| A load job fails mentioning the number of partitions | The table is partitioned by `DAY` and the batch spans more than 4000 days of `created_at`. Recreate it with `MONTH` |
 | `--un-buffer re-dumps the whole table and requires --delete-table` | Add `--delete-table`, or drop `--un-buffer` |
 | `BigQuery table x not found` | Add `--create-table` on the first run |
 | `Google Service Account JSON Key File not found: <path>` | `BQ_KEY_FILE` points nowhere. Remember it is relative to the directory of the `.env` |

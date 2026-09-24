@@ -32,12 +32,17 @@ abstract class SyncServiceTestCase extends TestCase
     /**
      * Partial mock: the real execute() runs, but the batch senders and the
      * table creation (which hit MySQL/BigQuery) are stubbed out.
+     *
+     * @param array $stubbed Methods replaced by doubles; drop 'createTable'
+     *                       to exercise the real one (still on doubled
+     *                       BigQuery/Mysql)
      */
-    protected function service(): SyncService&MockObject
-    {
+    protected function service(
+        array $stubbed = ['sendBatch', 'sendBatchUnbuffered', 'createTable']
+    ): SyncService&MockObject {
         return $this->getMockBuilder(SyncService::class)
             ->setConstructorArgs([$this->bigQuery, $this->mysql])
-            ->onlyMethods(['sendBatch', 'sendBatchUnbuffered', 'createTable'])
+            ->onlyMethods($stubbed)
             ->getMock();
     }
 
@@ -52,7 +57,8 @@ abstract class SyncServiceTestCase extends TestCase
         bool $createTable = false,
         bool $deleteTable = false,
         bool $noData = false,
-        bool $unbuffered = false
+        bool $unbuffered = false,
+        ?string $partitionType = null
     ): void {
         $service->execute(
             'mydb',
@@ -64,7 +70,8 @@ abstract class SyncServiceTestCase extends TestCase
             $ignoreColumns,
             $this->output,
             $noData,
-            $unbuffered
+            $unbuffered,
+            $partitionType
         );
     }
 

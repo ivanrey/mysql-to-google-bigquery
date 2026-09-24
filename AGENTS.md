@@ -61,6 +61,8 @@ DB_DATABASE_NAME, DB_USERNAME, DB_PASSWORD, DB_HOST (no hay DB_PORT: Mysql.php
                     no lo lee, el puerto es el default del driver)
 IGNORE_COLUMNS      Columnas a omitir (separadas por coma)
 CREATED_AT_LOOKBACK Ventana para filtros created_at (ej. "-8 days")
+PARTITION_TYPE      Partición por created_at al crear tablas: DAY|MONTH|YEAR|NONE
+                    (default MONTH; override por tabla PARTITION_TYPE_<TABLA>)
 MAX_ROWS_PER_BATCH  Filas por batch (default 600000)
 CACHE_DIR           Directorio para los JSON temporales
 CONFIG_DIR          Directorio que contiene los entornos (default <proyecto>/envs)

@@ -26,11 +26,38 @@ class SyncService
      * @param  string $databaseName         Database name
      * @param  string $tableName            Table name
      * @param  string $bigQueryTableName    BigQuery Table name
+     * @param  OutputInterface $output      Output
+     * @param  array  $ignoreColumns        Ignore columns from syncing
+     * @param  string|null $partitionType   Partition granularity (null = unpartitioned)
      */
-    protected function createTable(string $databaseName, string $tableName, string $bigQueryTableName)
-    {
+    protected function createTable(
+        string $databaseName,
+        string $tableName,
+        string $bigQueryTableName,
+        OutputInterface $output,
+        array $ignoreColumns = [],
+        ?string $partitionType = null
+    ) {
         $mysqlTableColumns = $this->mysql->getTableColumns($databaseName, $tableName);
-        $this->bigQuery->createTable($bigQueryTableName, $mysqlTableColumns);
+
+        if ($partitionType !== null) {
+            $partitionColumn = $this->bigQuery->getPartitionColumn($mysqlTableColumns, $ignoreColumns);
+
+            if ($partitionColumn === null) {
+                // Not an error: the table syncs fine, its queries just scan it whole
+                $output->writeln(
+                    '<fg=yellow>Warning: no usable "' . BigQuery::PARTITION_COLUMN . '" column ' .
+                    '(missing, ignored or not a date): the table is created without partitioning.</>'
+                );
+                $partitionType = null;
+            } else {
+                $output->writeln(
+                    '<fg=green>Partitioning by "' . $partitionColumn . '" (' . $partitionType . ')</>'
+                );
+            }
+        }
+
+        $this->bigQuery->createTable($bigQueryTableName, $mysqlTableColumns, $partitionType);
     }
 
     /**
@@ -43,6 +70,9 @@ class SyncService
      * @param  string          $orderColumn           Column to sort and compare result sets
      * @param  array           $ignoreColumns         Ignore columns from syncing
      * @param  OutputInterface $output                Output
+     * @param  bool            $noData                Only handle the schema, copy no rows
+     * @param  bool            $unbuffered            Full dump streaming the MySQL table
+     * @param  string|null     $partitionType         --partition-type, overriding PARTITION_TYPE
      */
     public function execute(
         string $databaseName,
@@ -54,7 +84,8 @@ class SyncService
         array $ignoreColumns,
         OutputInterface $output,
         bool $noData = false,
-        bool $unbuffered = false
+        bool $unbuffered = false,
+        ?string $partitionType = null
     ) {
         if ($unbuffered && !$deleteTable) {
             // The unbuffered mode re-dumps the whole table; without an explicit
@@ -64,6 +95,11 @@ class SyncService
                 'The reload is atomic (WRITE_TRUNCATE): the table is replaced on job commit, never left empty.'
             );
         }
+
+        // Resolved up front, like the created_at check below: an invalid value
+        // must fail before the destructive --delete-table
+        $partitionTypeOption = $partitionType;
+        $partitionType = $this->bigQuery->getPartitionType($bigQueryTableName, $partitionTypeOption);
 
         // Validate before the destructive --delete-table below: a table that
         // can't be synced incrementally must not lose its BigQuery data first
@@ -99,11 +135,19 @@ class SyncService
                 throw new \Exception('BigQuery table ' . $bigQueryTableName . ' not found');
             }
             $output->writeln("<fg=green>Creating table: " . $tableName."</>");
-            $this->createTable($databaseName, $tableName, $bigQueryTableName);
+            $this->createTable($databaseName, $tableName, $bigQueryTableName, $output, $ignoreColumns, $partitionType);
         }
         else
         {
             $output->writeln("<fg=green>We will not create a table</>");
+
+            if ($partitionTypeOption !== null && trim($partitionTypeOption) !== '') {
+                // An existing table keeps the partitioning it was created with
+                $output->writeln(
+                    '<fg=yellow>Warning: --partition-type only applies when the table is created; ' .
+                    'to repartition it run --delete-table (without --un-buffer).</>'
+                );
+            }
         }
 
         if ( $noData )

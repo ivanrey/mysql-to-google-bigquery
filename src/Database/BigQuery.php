@@ -8,6 +8,25 @@ use MysqlToGoogleBigQuery\Config\EnvironmentLoader;
 
 class BigQuery
 {
+    /**
+     * Column the incremental filters look back on (getMaxColumnValue(),
+     * deleteColumnValue()), and so the one tables are partitioned by:
+     * partitioning by any other column would prune nothing
+     */
+    public const PARTITION_COLUMN = 'created_at';
+
+    /**
+     * Accepted partition granularities; NONE creates unpartitioned tables
+     */
+    public const PARTITION_TYPES = ['DAY', 'MONTH', 'YEAR', 'NONE'];
+
+    /**
+     * MONTH keeps a full dump under the 4000 partitions a single load job may
+     * modify (DAY fails with more than ~11 years of history), and a lookback
+     * of days still reads only one or two partitions
+     */
+    public const DEFAULT_PARTITION_TYPE = 'MONTH';
+
     protected ?BigQueryClient $client = null;
     protected $tablesMetadata = [];
 
@@ -23,83 +42,169 @@ class BigQuery
      * Create a BigQuery Table based on MySQL Table columns
      * @param string $tableName Table Name
      * @param array $mysqlTableColumns Array of Doctrine\DBAL\Schema\Column
+     * @param string|null $partitionType Partition granularity by PARTITION_COLUMN
+     *                                   (null = unpartitioned). Check it is usable
+     *                                   with getPartitionColumn() first
      * @return \Google\Cloud\BigQuery\Table Table object
      */
-    public function createTable($tableName, $mysqlTableColumns)
+    public function createTable($tableName, $mysqlTableColumns, ?string $partitionType = null)
     {
         $bigQueryColumns = [];
 
-        // Valid types for BigQuery are:
-        // STRING, BYTES, INTEGER, FLOAT, BOOLEAN,
-        // TIMESTAMP, DATE, TIME, DATETIME
         foreach ($mysqlTableColumns as $name => $column) {
-            switch ($column->getType()->getName()) {
-                case 'bigquerydate':
-                    $type = 'DATE';
-                    break;
-
-                case 'bigquerydatetime':
-                    $type = 'DATETIME';
-                    break;
-
-                case Types::BIGINT:
-                    $type = 'INTEGER';
-                    break;
-
-                case Types::BOOLEAN:
-                    $type = 'BOOLEAN';
-                    break;
-
-                case Types::DATE_MUTABLE:
-                case Types::DATE_IMMUTABLE:
-                    $type = 'DATETIME';
-                    break;
-
-                case Types::DATETIME_MUTABLE:
-                case Types::DATETIME_IMMUTABLE:
-                    $type = 'DATETIME';
-                    break;
-
-                case Types::DECIMAL:
-                    $type = 'FLOAT';
-                    break;
-
-                case Types::FLOAT:
-                    $type = 'FLOAT';
-                    break;
-
-                case Types::INTEGER:
-                    $type = 'INTEGER';
-                    break;
-
-                case Types::SMALLINT:
-                    $type = 'INTEGER';
-                    break;
-
-                case Types::TIME_MUTABLE:
-                case Types::TIME_IMMUTABLE:
-                    $type = 'TIME';
-                    break;
-
-                default:
-                    $type = 'STRING';
-                    break;
-            }
-
             $bigQueryColumns[] = [
                 'name' => $name,
-                'type' => $type
+                'type' => $this->getBigQueryType($column)
+            ];
+        }
+
+        $options = [
+            'schema' => [
+                'fields' => $bigQueryColumns
+            ],
+        ];
+
+        if ($partitionType !== null) {
+            $options['timePartitioning'] = [
+                'type' => $partitionType,
+                'field' => self::PARTITION_COLUMN,
             ];
         }
 
         $client = $this->getClient();
         $dataset = $client->dataset($_ENV['BQ_DATASET']);
 
-        return $dataset->createTable($tableName, [
-            'schema' => [
-                'fields' => $bigQueryColumns
-            ],
-        ]);
+        return $dataset->createTable($tableName, $options);
+    }
+
+    /**
+     * BigQuery type a MySQL column is created as
+     * @param \Doctrine\DBAL\Schema\Column $column MySQL column
+     * @return string BigQuery type
+     */
+    protected function getBigQueryType($column): string
+    {
+        // Valid types for BigQuery are:
+        // STRING, BYTES, INTEGER, FLOAT, BOOLEAN,
+        // TIMESTAMP, DATE, TIME, DATETIME
+        switch ($column->getType()->getName()) {
+            case 'bigquerydate':
+                return 'DATE';
+
+            case 'bigquerydatetime':
+                return 'DATETIME';
+
+            case Types::BIGINT:
+                return 'INTEGER';
+
+            case Types::BOOLEAN:
+                return 'BOOLEAN';
+
+            case Types::DATE_MUTABLE:
+            case Types::DATE_IMMUTABLE:
+                return 'DATETIME';
+
+            case Types::DATETIME_MUTABLE:
+            case Types::DATETIME_IMMUTABLE:
+                return 'DATETIME';
+
+            case Types::DECIMAL:
+                return 'FLOAT';
+
+            case Types::FLOAT:
+                return 'FLOAT';
+
+            case Types::INTEGER:
+                return 'INTEGER';
+
+            case Types::SMALLINT:
+                return 'INTEGER';
+
+            case Types::TIME_MUTABLE:
+            case Types::TIME_IMMUTABLE:
+                return 'TIME';
+
+            default:
+                return 'STRING';
+        }
+    }
+
+    /**
+     * Column a table can be partitioned by: PARTITION_COLUMN, as long as it
+     * exists, is synced and becomes a DATE/DATETIME (BigQuery cannot
+     * partition by a STRING, and an ignored column would be all NULLs)
+     *
+     * @param array $mysqlTableColumns Array of Doctrine\DBAL\Schema\Column
+     * @param array $ignoreColumns Columns not synced
+     * @return string|null Partition column, null if the table has none usable
+     */
+    public function getPartitionColumn(array $mysqlTableColumns, array $ignoreColumns = []): ?string
+    {
+        $column = self::PARTITION_COLUMN;
+
+        if (in_array($column, $ignoreColumns) || !array_key_exists($column, $mysqlTableColumns)) {
+            return null;
+        }
+
+        return in_array($this->getBigQueryType($mysqlTableColumns[$column]), ['DATE', 'DATETIME'], true)
+            ? $column
+            : null;
+    }
+
+    /**
+     * Resolve the partition granularity a table is created with.
+     *
+     * Precedence: the --partition-type option > PARTITION_TYPE_<TABLE> >
+     * PARTITION_TYPE > DEFAULT_PARTITION_TYPE. Case-insensitive.
+     *
+     * @param string $tableName BigQuery table name
+     * @param string|null $override Value of --partition-type, if given
+     * @return string|null DAY, MONTH or YEAR; null for NONE
+     */
+    public function getPartitionType(string $tableName, ?string $override = null): ?string
+    {
+        if ($override !== null && trim($override) !== '') {
+            [$value, $source] = [trim($override), '--partition-type'];
+        } else {
+            [$value, $source] = $this->getTableSetting('PARTITION_TYPE', $tableName)
+                ?? [self::DEFAULT_PARTITION_TYPE, 'PARTITION_TYPE'];
+        }
+
+        $type = strtoupper($value);
+
+        if (!in_array($type, self::PARTITION_TYPES, true)) {
+            throw new \InvalidArgumentException(
+                'Invalid partition type "' . $value . '" in ' . $source .
+                ': must be one of ' . implode(', ', self::PARTITION_TYPES)
+            );
+        }
+
+        return $type === 'NONE' ? null : $type;
+    }
+
+    /**
+     * Read a setting that can be overridden per table: <VARIABLE>_<TABLE>
+     * (BigQuery table name uppercased, non-alphanumerics replaced by "_")
+     * wins over <VARIABLE>.
+     *
+     * Empty/whitespace-only values count as unset, so a bare `VARIABLE=` line
+     * (or a blank per-table override) falls back to the next source.
+     *
+     * @param string $variable Global variable name
+     * @param string $tableName BigQuery table name
+     * @return array|null [trimmed value, variable it came from], null if unset
+     */
+    protected function getTableSetting(string $variable, string $tableName): ?array
+    {
+        $tableVar = $variable . '_' . preg_replace('/[^A-Z0-9]/', '_', strtoupper($tableName));
+
+        foreach ([$tableVar, $variable] as $var) {
+            if (isset($_ENV[$var]) && trim($_ENV[$var]) !== '') {
+                return [trim($_ENV[$var]), $var];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -142,20 +247,8 @@ class BigQuery
      */
     public function getCreatedAtLookback(string $tableName): string
     {
-        $tableVar = 'CREATED_AT_LOOKBACK_' . preg_replace('/[^A-Z0-9]/', '_', strtoupper($tableName));
-
-        // Empty/whitespace-only values count as unset, so a bare
-        // `CREATED_AT_LOOKBACK=` line (or a blank per-table override) falls
-        // back to the next source instead of aborting the sync.
-        $lookback = '-3 month';
-        $source = 'CREATED_AT_LOOKBACK';
-        foreach ([$tableVar, 'CREATED_AT_LOOKBACK'] as $var) {
-            if (isset($_ENV[$var]) && trim($_ENV[$var]) !== '') {
-                $lookback = trim($_ENV[$var]);
-                $source = $var;
-                break;
-            }
-        }
+        [$lookback, $source] = $this->getTableSetting('CREATED_AT_LOOKBACK', $tableName)
+            ?? ['-3 month', 'CREATED_AT_LOOKBACK'];
 
         $timestamp = strtotime($lookback);
 
